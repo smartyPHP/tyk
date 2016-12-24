@@ -59,7 +59,6 @@ func InstrumentationMW(handler func(http.ResponseWriter, *http.Request)) func(ht
 			"raw_url":  r.URL.String(),
 			"size":     strconv.Itoa(int(r.ContentLength)),
 		})
-
 		job.Complete(health.Success)
 	}
 }

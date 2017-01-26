@@ -2,21 +2,34 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/justinas/alice"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
-	"fmt"
-)	
+
+	"github.com/alicebob/miniredis"
+	"github.com/justinas/alice"
+)
 
 func init() {
-	fmt.Println("THIS IS THE TEST SETUP INIT")
+	runningTests = true
+}
+
+func TestMain(m *testing.M) {
+	s, err := miniredis.Run()
+	if err != nil {
+		panic(err)
+	}
+	defer s.Close()
+	config.Storage.Port, _ = strconv.Atoi(s.Port())
 	initialiseSystem(map[string]interface{}{})
+	os.Exit(m.Run())
 }
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -28,21 +41,6 @@ func randSeq(n int) string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
-}
-
-func createThrottledSession() SessionState {
-	var thisSession SessionState
-	thisSession.Rate = 3
-	thisSession.Allowance = thisSession.Rate
-	thisSession.LastCheck = time.Now().Unix()
-	thisSession.Per = 60
-	thisSession.Expires = 0
-	thisSession.QuotaRenewalRate = 300 // 5 minutes
-	thisSession.QuotaRenews = time.Now().Unix()
-	thisSession.QuotaRemaining = 10
-	thisSession.QuotaMax = 10
-
-	return thisSession
 }
 
 func createNonThrottledSession() SessionState {
@@ -87,7 +85,7 @@ func createVersionedSession() SessionState {
 	thisSession.QuotaRenews = time.Now().Unix()
 	thisSession.QuotaRemaining = 10
 	thisSession.QuotaMax = -1
-	thisSession.AccessRights = map[string]AccessDefinition{"9991": AccessDefinition{APIName: "Tyk Test API", APIID: "9991", Versions: []string{"v1"}}}
+	thisSession.AccessRights = map[string]AccessDefinition{"9991": {APIName: "Tyk Test API", APIID: "9991", Versions: []string{"v1"}}}
 
 	return thisSession
 }
@@ -103,7 +101,7 @@ func createParamAuthSession() SessionState {
 	thisSession.QuotaRenews = time.Now().Unix()
 	thisSession.QuotaRemaining = 10
 	thisSession.QuotaMax = -1
-	thisSession.AccessRights = map[string]AccessDefinition{"9992": AccessDefinition{APIName: "Tyk Test API", APIID: "9992", Versions: []string{"default"}}}
+	thisSession.AccessRights = map[string]AccessDefinition{"9992": {APIName: "Tyk Test API", APIID: "9992", Versions: []string{"default"}}}
 
 	return thisSession
 }
@@ -127,12 +125,12 @@ type TykErrorResponse struct {
 	Error string
 }
 
-func getChain(spec APISpec) http.Handler {
+func getChain(spec *APISpec) http.Handler {
 	remote, _ := url.Parse(spec.Proxy.TargetURL)
 	//remote, _ := url.Parse("http://example.com/")
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
+	proxy := TykNewSingleHostReverseProxy(remote, spec)
+	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, spec))
+	tykMiddleware := &TykMiddleware{spec, proxy}
 	chain := alice.New(
 		CreateMiddleware(&IPWhiteListMiddleware{tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&AuthKey{tykMiddleware}, tykMiddleware),
@@ -144,7 +142,7 @@ func getChain(spec APISpec) http.Handler {
 	return chain
 }
 
-var nonExpiringDefNoWhiteList string = `
+var nonExpiringDefNoWhiteList = `
 
 	{
 		"name": "Tyk Test API",
@@ -202,7 +200,7 @@ var nonExpiringDefNoWhiteList string = `
 
 `
 
-var VersionedDefinition string = `
+var VersionedDefinition = `
 
 	{
 		"name": "Tyk Test API",
@@ -261,7 +259,7 @@ var VersionedDefinition string = `
 
 `
 
-var PathBasedDefinition string = `
+var PathBasedDefinition = `
 
 	{
 		"name": "Tyk Test API",
@@ -300,7 +298,7 @@ var PathBasedDefinition string = `
 
 `
 
-var ExtendedPathGatewaySetup string = `
+var ExtendedPathGatewaySetup = `
 
 	{
 		"name": "Tyk Test API",
@@ -440,31 +438,22 @@ var ExtendedPathGatewaySetup string = `
 			"strip_listen_path": false
 		}
 	}
-
 `
 
-func createExtendedDefinitionWithPaths() APISpec {
-
+func createExtendedDefinitionWithPaths() *APISpec {
 	return createDefinitionFromString(ExtendedPathGatewaySetup)
-
 }
 
-func createNonVersionedDefinition() APISpec {
-
+func createNonVersionedDefinition() *APISpec {
 	return createDefinitionFromString(nonExpiringDefNoWhiteList)
-
 }
 
-func createVersionedDefinition() APISpec {
-
+func createVersionedDefinition() *APISpec {
 	return createDefinitionFromString(VersionedDefinition)
-
 }
 
-func createPathBasedDefinition() APISpec {
-
+func createPathBasedDefinition() *APISpec {
 	return createDefinitionFromString(PathBasedDefinition)
-
 }
 
 func TestParambasedAuth(t *testing.T) {
@@ -505,25 +494,29 @@ func TestParambasedAuth(t *testing.T) {
 	// Ensure the post data is still sent
 	contents, _ := ioutil.ReadAll(recorder.Body)
 	dat := make(map[string]interface{})
-	jErr := json.Unmarshal(contents, &dat)
 
-	if jErr != nil {
-		log.Error("JSON decoding failed")
+	if err := json.Unmarshal(contents, &dat); err != nil {
+		t.Fatal("JSON decoding failed:", err)
 	}
 
-	if dat["args"].(map[string]interface{})["authorization"].(string) != "54321" {
+	args, ok := dat["args"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Invalid response")
+	}
+	if args["authorization"].(string) != "54321" {
 		t.Error("Request params did not arrive")
 	}
-
-	if dat["form"].(map[string]interface{})["foo"].(string) != "swiggetty" {
+	fmap, ok := dat["form"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Invalid response")
+	}
+	if fmap["foo"].(string) != "swiggetty" {
 		t.Error("Form param 1 did not arrive")
 	}
-
-	if dat["form"].(map[string]interface{})["bar"].(string) != "swoggetty" {
+	if fmap["bar"].(string) != "swoggetty" {
 		t.Error("Form param 2 did not arrive")
 	}
-
-	if dat["form"].(map[string]interface{})["baz"].(string) != "swoogetty" {
+	if fmap["baz"].(string) != "swoogetty" {
 		t.Error("Form param 3 did not arrive")
 	}
 
@@ -635,7 +628,7 @@ func TestVersioningRequestFail(t *testing.T) {
 	orgStore := &RedisClusterStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 	thisSession := createVersionedSession()
-	thisSession.AccessRights = map[string]AccessDefinition{"9991": AccessDefinition{APIName: "Tyk Test API", APIID: "9991", Versions: []string{"v2"}}}
+	thisSession.AccessRights = map[string]AccessDefinition{"9991": {APIName: "Tyk Test API", APIID: "9991", Versions: []string{"v2"}}}
 
 	// no version allowed
 	spec.SessionManager.UpdateSession("zz1234", thisSession, 60)
@@ -864,9 +857,7 @@ func TestWithAnalyticsErrorResponse(t *testing.T) {
 		t.Error("Request failed with 200 code: \n", recorder.Code)
 	}
 
-	time.Sleep(1)
 	results := analytics.Store.GetKeysAndValues()
-
 	if len(results) < 1 {
 		t.Error("Not enough results! Should be 1, is: ", len(results))
 	}

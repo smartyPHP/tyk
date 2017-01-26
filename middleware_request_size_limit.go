@@ -14,8 +14,6 @@ type RequestSizeLimitMiddleware struct {
 	*TykMiddleware
 }
 
-type RequestSizeLimitConfig struct{}
-
 // New lets you do any initialisations for the object can be done here
 func (t *RequestSizeLimitMiddleware) New() {}
 
@@ -30,8 +28,8 @@ func (t *RequestSizeLimitMiddleware) GetConfig() (interface{}, error) {
 
 func (t *RequestSizeLimitMiddleware) IsEnabledForSpec() bool {
 	var used bool
-	for _, thisVersion := range t.TykMiddleware.Spec.VersionData.Versions {
-		if len(thisVersion.ExtendedPaths.SizeLimit) > 0 {
+	for _, version := range t.TykMiddleware.Spec.VersionData.Versions {
+		if len(version.ExtendedPaths.SizeLimit) > 0 {
 			used = true
 			break
 		}
@@ -49,7 +47,7 @@ func (t *RequestSizeLimitMiddleware) checkRequestLimit(r *http.Request, sizeLimi
 	asInt, convErr := strconv.Atoi(statedCL)
 	if convErr != nil {
 		log.Error("String conversion for content length failed:", convErr)
-		return errors.New("Content length is not a valid Integer!"), 400
+		return errors.New("content length is not a valid Integer"), 400
 	}
 
 	// Check stated size
@@ -83,10 +81,6 @@ func (t *RequestSizeLimitMiddleware) checkRequestLimit(r *http.Request, sizeLimi
 // RequestSizeLimit will check a request for maximum request size, this can be a global limit or a matched limit.
 func (t *RequestSizeLimitMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
 	log.Debug("Request size limiter active")
-	// Uee the request status validator to see if it's in our cache list
-	var stat RequestStatus
-	var meta interface{}
-	var found bool
 
 	vInfo, versionPaths, _, _ := t.TykMiddleware.Spec.GetVersionData(r)
 
@@ -107,17 +101,11 @@ func (t *RequestSizeLimitMiddleware) ProcessRequest(w http.ResponseWriter, r *ht
 	}
 
 	// If there's a potential match, try to match
-	found, meta = t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, RequestSizeLimit)
+	found, meta := t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, RequestSizeLimit)
 	if found {
-		stat = StatusRequestSizeControlled
-	}
-
-	if stat == StatusRequestSizeControlled {
 		log.Debug("Request size limit matched for this URL, checking...")
-		thisMeta := meta.(*tykcommon.RequestSizeMeta)
-
-		return t.checkRequestLimit(r, thisMeta.SizeLimit)
-
+		rmeta := meta.(*tykcommon.RequestSizeMeta)
+		return t.checkRequestLimit(r, rmeta.SizeLimit)
 	}
 
 	return nil, 200

@@ -13,8 +13,6 @@ type TransformMethod struct {
 	*TykMiddleware
 }
 
-type TransformMethodConfig struct{}
-
 func (mw *TransformMethod) GetName() string {
 	return "TransformMethod"
 }
@@ -29,8 +27,8 @@ func (t *TransformMethod) GetConfig() (interface{}, error) {
 
 func (t *TransformMethod) IsEnabledForSpec() bool {
 	var used bool
-	for _, thisVersion := range t.TykMiddleware.Spec.VersionData.Versions {
-		if len(thisVersion.ExtendedPaths.MethodTransforms) > 0 {
+	for _, version := range t.TykMiddleware.Spec.VersionData.Versions {
+		if len(version.ExtendedPaths.MethodTransforms) > 0 {
 			used = true
 			break
 		}
@@ -41,21 +39,12 @@ func (t *TransformMethod) IsEnabledForSpec() bool {
 
 // ProcessRequest will run any checks on the request on the way through the system, return an error to have the chain fail
 func (t *TransformMethod) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
-	// Uee the request status validator to see if it's in our cache list
-	var stat RequestStatus
-	var meta interface{}
-	var found bool
-
 	_, versionPaths, _, _ := t.TykMiddleware.Spec.GetVersionData(r)
-	found, meta = t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, MethodTransformed)
+	found, meta := t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, MethodTransformed)
 	if found {
-		stat = StatusMethodTransformed
-	}
+		mmeta := meta.(*tykcommon.MethodTransformMeta)
 
-	if stat == StatusMethodTransformed {
-		thisMeta := meta.(*tykcommon.MethodTransformMeta)
-
-		switch strings.ToUpper(thisMeta.ToMethod) {
+		switch strings.ToUpper(mmeta.ToMethod) {
 		case "GET":
 			r.Method = "GET"
 			return nil, 200

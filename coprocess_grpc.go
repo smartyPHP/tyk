@@ -4,10 +4,10 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"net/url"
 	"time"
-	"errors"
 
 	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/tyk/coprocess"
@@ -17,7 +17,7 @@ import (
 )
 
 // CoProcessName specifies the driver name.
-const CoProcessName string = "grpc"
+const CoProcessName = "grpc"
 
 // MessageType sets the default message type.
 var MessageType = coprocess.ProtobufMessage
@@ -49,7 +49,7 @@ func dialer(addr string, timeout time.Duration) (conn net.Conn, err error) {
 		return nil, errors.New(errString)
 	}
 
-	grpcUrlString := config.CoProcessOptions.CoProcessGRPCServer[len(grpcUrl.Scheme)+3 : len(config.CoProcessOptions.CoProcessGRPCServer)]
+	grpcUrlString := config.CoProcessOptions.CoProcessGRPCServer[len(grpcUrl.Scheme)+3:]
 
 	return net.DialTimeout(grpcUrl.Scheme, grpcUrlString, timeout)
 }
@@ -86,17 +86,14 @@ func (d *GRPCDispatcher) Reload() {
 }
 
 // HandleMiddlewareCache isn't used by gRPC.
-func (d* GRPCDispatcher) HandleMiddlewareCache(b *tykcommon.BundleManifest, basePath string) {
+func (d *GRPCDispatcher) HandleMiddlewareCache(b *tykcommon.BundleManifest, basePath string) {
 	return
 }
 
 // NewCoProcessDispatcher wraps all the actions needed for this CP.
-func NewCoProcessDispatcher() (dispatcher coprocess.Dispatcher, err error) {
-
-	dispatcher, err = &GRPCDispatcher{}, nil
-
+func NewCoProcessDispatcher() (coprocess.Dispatcher, error) {
+	dispatcher, err := &GRPCDispatcher{}, nil
 	grpcConnection, err = grpc.Dial("", grpc.WithInsecure(), grpc.WithDialer(dialer))
-
 	grpcClient = coprocess.NewDispatcherClient(grpcConnection)
 
 	if err != nil {
@@ -104,7 +101,6 @@ func NewCoProcessDispatcher() (dispatcher coprocess.Dispatcher, err error) {
 			"prefix": "coprocess-grpc",
 		}).Error(err)
 	}
-
 	return dispatcher, err
 }
 

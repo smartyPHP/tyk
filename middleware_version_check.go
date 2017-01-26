@@ -34,13 +34,13 @@ func (a *VersionCheck) IsEnabledForSpec() bool {
 
 func (v *VersionCheck) DoMockReply(w http.ResponseWriter, meta interface{}) {
 	// Reply with some alternate data
-	thisMeta := meta.(*tykcommon.EndpointMethodMeta)
-	responseMessage := []byte(thisMeta.Data)
-	for header, value := range thisMeta.Headers {
+	emeta := meta.(*tykcommon.EndpointMethodMeta)
+	responseMessage := []byte(emeta.Data)
+	for header, value := range emeta.Headers {
 		w.Header().Add(header, value)
 	}
 
-	w.WriteHeader(thisMeta.Code)
+	w.WriteHeader(emeta.Code)
 	fmt.Fprintf(w, string(responseMessage))
 	return
 }
@@ -49,7 +49,7 @@ func (v *VersionCheck) DoMockReply(w http.ResponseWriter, meta interface{}) {
 func (v *VersionCheck) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
 	// Check versioning, blacklist, whitelist and ignored status
 	requestValid, stat, meta := v.TykMiddleware.Spec.IsRequestValid(r)
-	if requestValid == false {
+	if !requestValid {
 		// Fire a versioning failure event
 		go v.TykMiddleware.FireEvent(EVENT_VersionFailure,
 			EVENT_VersionFailureMeta{

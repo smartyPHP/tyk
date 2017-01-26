@@ -2,20 +2,21 @@ package main
 
 import (
 	"bytes"
-	"github.com/jeffail/tunny"
-	"github.com/pmylund/go-cache"
 	"math/rand"
 	"net/http"
 	"time"
+
+	"github.com/jeffail/tunny"
+	"github.com/pmylund/go-cache"
 )
 
 const (
-	defaultTimeout             int = 10
-	defaultWorkerPoolSize      int = 50
-	defaultSampletTriggerLimit int = 3
+	defaultTimeout             = 10
+	defaultWorkerPoolSize      = 50
+	defaultSampletTriggerLimit = 3
 )
 
-var HostCheckerClient *http.Client = &http.Client{Timeout: 500 * time.Millisecond}
+var HostCheckerClient = &http.Client{Timeout: 500 * time.Millisecond}
 
 type HostData struct {
 	CheckURL string
@@ -50,7 +51,7 @@ type HostUptimeChecker struct {
 	sampleCache     *cache.Cache
 	stopLoop        bool
 	doResetList     bool
-	newList         *map[string]HostData
+	newList         map[string]HostData
 }
 
 func (h *HostUptimeChecker) getStaggeredTime() time.Duration {
@@ -74,7 +75,7 @@ func (h *HostUptimeChecker) HostCheckLoop() {
 		}
 		if h.doResetList {
 			if h.newList != nil {
-				h.HostList = *h.newList
+				h.HostList = h.newList
 				h.newList = nil
 				h.doResetList = false
 				log.Debug("[HOST CHECKER] Host list reset")
@@ -83,7 +84,7 @@ func (h *HostUptimeChecker) HostCheckLoop() {
 		for _, host := range h.HostList {
 			_, err := h.pool.SendWork(host)
 			if err != nil {
-				log.Error("[HOST CHECKER] could not send work, error: %v", err)
+				log.Errorf("[HOST CHECKER] could not send work, error: %v", err)
 			}
 		}
 
@@ -112,7 +113,7 @@ func (h *HostUptimeChecker) HostReporter() {
 
 			} else {
 				newVal := cachedHostCount.(int)
-				newVal += 1
+				newVal++
 				go h.sampleCache.Set(failedHost.ID, newVal, cache.DefaultExpiration)
 
 				if newVal > h.sampleTriggerLimit {
@@ -129,7 +130,7 @@ func (h *HostUptimeChecker) HostReporter() {
 
 		case <-h.stopPollingChan:
 			log.Debug("[HOST CHECKER] Received kill signal")
-			break
+			return
 		}
 	}
 }
@@ -216,8 +217,8 @@ func (h *HostUptimeChecker) Init(workers, triggerLimit, timeout int, hostList ma
 	log.Debug("[HOST CHECKER] Config:Timeout: ~", h.checkTimout)
 	log.Debug("[HOST CHECKER] Config:WorkerPool: ", h.workerPoolSize)
 
-	var pErr error
-	h.pool, pErr = tunny.CreatePool(h.workerPoolSize, func(hostData interface{}) interface{} {
+	var err error
+	h.pool, err = tunny.CreatePool(h.workerPoolSize, func(hostData interface{}) interface{} {
 		input, _ := hostData.(HostData)
 		h.CheckHost(input)
 		return nil
@@ -225,8 +226,8 @@ func (h *HostUptimeChecker) Init(workers, triggerLimit, timeout int, hostList ma
 
 	log.Debug("[HOST CHECKER] Init complete")
 
-	if pErr != nil {
-		log.Error("[HOST CHECKER POOL] Error: %v\n", pErr)
+	if err != nil {
+		log.Errorf("[HOST CHECKER POOL] Error: %v\n", err)
 	}
 }
 
@@ -247,50 +248,13 @@ func (h *HostUptimeChecker) Stop() {
 	h.pool.Close()
 }
 
-func (h *HostUptimeChecker) AddHost(hd HostData) {
-	h.HostList[hd.ID] = hd
-	log.Info("[HOST CHECKER] Tracking: ", hd.ID)
-}
-
 func (h *HostUptimeChecker) RemoveHost(name string) {
 	delete(h.HostList, name)
 	log.Info("[HOST CHECKER] Stopped tracking: ", name)
 }
 
-func (h *HostUptimeChecker) ResetList(hostList *map[string]HostData) {
+func (h *HostUptimeChecker) ResetList(hostList map[string]HostData) {
 	h.doResetList = true
 	h.newList = hostList
 	log.Debug("[HOST CHECKER] Checker reset queued!")
-}
-
-func hostcheck_example() {
-	// Create the poller
-	poller := &HostUptimeChecker{}
-	poller.Init(defaultWorkerPoolSize,
-		defaultSampletTriggerLimit,
-		defaultTimeout,
-		map[string]HostData{},
-		// On failure
-		func(fr HostHealthReport) {
-			log.Error("This host is failing: ", fr.CheckURL)
-			log.Info("---> Latency: \t", fr.Latency)
-			if fr.IsTCPError {
-				log.Info("---> TCP Error: \t", fr.IsTCPError)
-			} else {
-				log.Info("---> Response Code: \t", fr.ResponseCode)
-			}
-
-		},
-		// On success
-		func(fr HostHealthReport) {
-			log.Info("Host is back up! URL: ", fr.CheckURL)
-		},
-		func(fr HostHealthReport) {
-			log.Info("Host report, URL: ", fr.CheckURL)
-		})
-
-	// Start the check loop
-	poller.Start()
-	defer poller.Stop()
-
 }

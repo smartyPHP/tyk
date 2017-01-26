@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/justinas/alice"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/justinas/alice"
 )
 
 func createAuthKeyAuthSession() SessionState {
@@ -25,16 +26,16 @@ func createAuthKeyAuthSession() SessionState {
 	thisSession.QuotaRemaining = 10
 	thisSession.QuotaMax = 10
 
-	thisSession.AccessRights = map[string]AccessDefinition{"31": AccessDefinition{APIName: "Tyk Auth Key Test", APIID: "31", Versions: []string{"default"}}}
+	thisSession.AccessRights = map[string]AccessDefinition{"31": {APIName: "Tyk Auth Key Test", APIID: "31", Versions: []string{"default"}}}
 
 	return thisSession
 }
 
-func getAuthKeyChain(spec APISpec) http.Handler {
+func getAuthKeyChain(spec *APISpec) http.Handler {
 	remote, _ := url.Parse(spec.Proxy.TargetURL)
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
+	proxy := TykNewSingleHostReverseProxy(remote, spec)
+	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, spec))
+	tykMiddleware := &TykMiddleware{spec, proxy}
 	chain := alice.New(
 		CreateMiddleware(&IPWhiteListMiddleware{tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&AuthKey{tykMiddleware}, tykMiddleware),
@@ -46,7 +47,7 @@ func getAuthKeyChain(spec APISpec) http.Handler {
 	return chain
 }
 
-func setUp(def string) APISpec {
+func setUp(def string) *APISpec {
 	spec := createDefinitionFromString(def)
 	redisStore := RedisClusterStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisClusterStorageManager{KeyPrefix: "apihealth."}
@@ -80,40 +81,40 @@ func TestBearerTokenAuthKeySession(t *testing.T) {
 	}
 }
 
-var authKeyDef string = `
-  {
-		"name": "Tyk Auth Key Test",
-		"api_id": "31",
-		"org_id": "default",
-    "use_keyless": false,
-		"definition": {
-			"location": "header",
-			"key": "version"
-		},
-		"auth": {
-			"auth_header_name": "authorization"
-		},
-		"version_data": {
-			"not_versioned": true,
-			"versions": {
-				"Default": {
-					"name": "Default",
-					"use_extended_paths": true,
-					"expires": "3000-01-02 15:04",
-					"paths": {
-						"ignored": [],
-						"white_list": [],
-						"black_list": []
-					}
+var authKeyDef = `
+{
+	"name": "Tyk Auth Key Test",
+	"api_id": "31",
+	"org_id": "default",
+	"use_keyless": false,
+	"definition": {
+		"location": "header",
+		"key": "version"
+	},
+	"auth": {
+		"auth_header_name": "authorization"
+	},
+	"version_data": {
+		"not_versioned": true,
+		"versions": {
+			"Default": {
+				"name": "Default",
+				"use_extended_paths": true,
+				"expires": "3000-01-02 15:04",
+				"paths": {
+					"ignored": [],
+					"white_list": [],
+					"black_list": []
 				}
 			}
-		},
-		"proxy": {
-			"listen_path": "/auth_key_test/",
-			"target_url": "http://example.com/",
-			"strip_listen_path": true
 		}
-	}`
+	},
+	"proxy": {
+		"listen_path": "/auth_key_test/",
+		"target_url": "http://example.com/",
+		"strip_listen_path": true
+	}
+}`
 
 func TestMultiAuthBackwardsCompatibleSession(t *testing.T) {
 	spec := setUp(multiAuthBackwardsCompatible)
@@ -138,41 +139,41 @@ func TestMultiAuthBackwardsCompatibleSession(t *testing.T) {
 	}
 }
 
-var multiAuthBackwardsCompatible string = `
-  {
-		"name": "Tyk Auth Key Test",
-		"api_id": "31",
-		"org_id": "default",
-    "use_keyless": false,
-		"definition": {
-			"location": "header",
-			"key": "version"
-		},
-		"auth": {
-			"auth_header_name": "token",
-      "use_param": true
-		},
-		"version_data": {
-			"not_versioned": true,
-			"versions": {
-				"Default": {
-					"name": "Default",
-					"use_extended_paths": true,
-					"expires": "3000-01-02 15:04",
-					"paths": {
-						"ignored": [],
-						"white_list": [],
-						"black_list": []
-					}
+var multiAuthBackwardsCompatible = `
+{
+	"name": "Tyk Auth Key Test",
+	"api_id": "31",
+	"org_id": "default",
+	"use_keyless": false,
+	"definition": {
+		"location": "header",
+		"key": "version"
+	},
+	"auth": {
+		"auth_header_name": "token",
+		"use_param": true
+	},
+	"version_data": {
+		"not_versioned": true,
+		"versions": {
+			"Default": {
+				"name": "Default",
+				"use_extended_paths": true,
+				"expires": "3000-01-02 15:04",
+				"paths": {
+					"ignored": [],
+					"white_list": [],
+					"black_list": []
 				}
 			}
-		},
-		"proxy": {
-			"listen_path": "/auth_key_test/",
-			"target_url": "http://example.com/",
-			"strip_listen_path": true
 		}
-	}`
+	},
+	"proxy": {
+		"listen_path": "/auth_key_test/",
+		"target_url": "http://example.com/",
+		"strip_listen_path": true
+	}
+}`
 
 func TestMultiAuthSession(t *testing.T) {
 	spec := setUp(multiAuthDef)
@@ -241,39 +242,39 @@ func TestMultiAuthSession(t *testing.T) {
 	}
 }
 
-var multiAuthDef string = `
-  {
-		"name": "Tyk Auth Key Test",
-		"api_id": "31",
-		"org_id": "default",
-    "use_keyless": false,
-		"definition": {
-			"location": "header",
-			"key": "version"
-		},
-		"auth": {
-			"auth_header_name": "authorization",
-      "param_name": "token",
-      "cookie_name": "oreo"
-		},
-		"version_data": {
-			"not_versioned": true,
-			"versions": {
-				"Default": {
-					"name": "Default",
-					"use_extended_paths": true,
-					"expires": "3000-01-02 15:04",
-					"paths": {
-						"ignored": [],
-						"white_list": [],
-						"black_list": []
-					}
+var multiAuthDef = `
+{
+	"name": "Tyk Auth Key Test",
+	"api_id": "31",
+	"org_id": "default",
+	"use_keyless": false,
+	"definition": {
+		"location": "header",
+		"key": "version"
+	},
+	"auth": {
+		"auth_header_name": "authorization",
+		"param_name": "token",
+		"cookie_name": "oreo"
+	},
+	"version_data": {
+		"not_versioned": true,
+		"versions": {
+			"Default": {
+				"name": "Default",
+				"use_extended_paths": true,
+				"expires": "3000-01-02 15:04",
+				"paths": {
+					"ignored": [],
+					"white_list": [],
+					"black_list": []
 				}
 			}
-		},
-		"proxy": {
-			"listen_path": "/auth_key_test/",
-			"target_url": "http://example.com/",
-			"strip_listen_path": true
 		}
-	}`
+	},
+	"proxy": {
+		"listen_path": "/auth_key_test/",
+		"target_url": "http://example.com/",
+		"strip_listen_path": true
+	}
+}`

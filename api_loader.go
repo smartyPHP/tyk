@@ -6,8 +6,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/tyk/coprocess"
@@ -103,9 +101,9 @@ func generateListenPathMap(APISpecs *[]*APISpec) {
 		domainHash := generateDomainPath(referenceSpec.Domain, referenceSpec.Proxy.ListenPath)
 		val, ok := ListenPathMap.Get(domainHash)
 		if ok {
-			thisVal := val.(int)
-			thisVal++
-			ListenPathMap.Set(domainHash, thisVal)
+			intVal := val.(int)
+			intVal++
+			ListenPathMap.Set(domainHash, intVal)
 		} else {
 			ListenPathMap.Set(domainHash, 1)
 			dN := referenceSpec.Domain
@@ -132,8 +130,8 @@ func processSpec(referenceSpec *APISpec,
 	rpcOrgStore *RPCStorageHandler,
 	subrouter *mux.Router) *ChainObject {
 
-	var thisChainDefinition = ChainObject{}
-	thisChainDefinition.Subrouter = subrouter
+	var chainDef = ChainObject{}
+	chainDef.Subrouter = subrouter
 
 	log.WithFields(logrus.Fields{
 		"prefix":   "main",
@@ -145,14 +143,14 @@ func processSpec(referenceSpec *APISpec,
 			"prefix":   "main",
 			"api_name": referenceSpec.APIDefinition.Name,
 		}).Warning("Skipped!")
-		thisChainDefinition.Skip = true
-		return &thisChainDefinition
+		chainDef.Skip = true
+		return &chainDef
 	}
 
 	// Set up LB targets:
 	if referenceSpec.Proxy.EnableLoadBalancing {
-		thisSL := tykcommon.NewHostListFromList(referenceSpec.Proxy.Targets)
-		referenceSpec.Proxy.StructuredTargetList = *thisSL
+		sl := tykcommon.NewHostListFromList(referenceSpec.Proxy.Targets)
+		referenceSpec.Proxy.StructuredTargetList = sl
 	}
 
 	// Initialise the auth and session managers (use Redis for now)
@@ -170,13 +168,13 @@ func processSpec(referenceSpec *APISpec,
 		authStore = redisStore
 		orgStore = redisOrgStore
 	case LDAPStorageEngine:
-		thisStorageEngine := LDAPStorageHandler{}
-		thisStorageEngine.LoadConfFromMeta(referenceSpec.AuthProvider.Meta)
-		authStore = &thisStorageEngine
+		storageEngine := LDAPStorageHandler{}
+		storageEngine.LoadConfFromMeta(referenceSpec.AuthProvider.Meta)
+		authStore = &storageEngine
 		orgStore = redisOrgStore
 	case RPCStorageEngine:
-		thisStorageEngine := rpcAuthStore // &RPCStorageHandler{KeyPrefix: "apikey-", HashKeys: config.HashKeys, UserKey: config.SlaveOptions.APIKey, Address: config.SlaveOptions.ConnectionString}
-		authStore = thisStorageEngine
+		storageEngine := rpcAuthStore // &RPCStorageHandler{KeyPrefix: "apikey-", HashKeys: config.HashKeys, UserKey: config.SlaveOptions.APIKey, Address: config.SlaveOptions.ConnectionString}
+		authStore = storageEngine
 		orgStore = rpcOrgStore // &RPCStorageHandler{KeyPrefix: "orgkey.", UserKey: config.SlaveOptions.APIKey, Address: config.SlaveOptions.ConnectionString}
 		config.EnforceOrgDataAge = true
 
@@ -204,7 +202,6 @@ func processSpec(referenceSpec *APISpec,
 	referenceSpec.Init(authStore, sessionStore, healthStore, orgStore)
 
 	//Set up all the JSVM middleware
-	mwPaths := []string{}
 	var mwAuthCheckFunc tykcommon.MiddlewareDefinition
 	mwPreFuncs := []tykcommon.MiddlewareDefinition{}
 	mwPostFuncs := []tykcommon.MiddlewareDefinition{}
@@ -223,6 +220,7 @@ func processSpec(referenceSpec *APISpec,
 			"api_name": referenceSpec.APIDefinition.Name,
 		}).Debug("Loading Middleware")
 
+		var mwPaths []string
 		mwPaths, mwAuthCheckFunc, mwPreFuncs, mwPostFuncs, mwPostAuthCheckFuncs, mwDriver = loadCustomMiddleware(referenceSpec)
 
 		if config.EnableJSVM && mwDriver == tykcommon.OttoDriver {
@@ -241,10 +239,10 @@ func processSpec(referenceSpec *APISpec,
 	if referenceSpec.UseOauth2 {
 		log.Debug("Loading OAuth Manager")
 		if !RPC_EmergencyMode {
-			thisOauthManager := addOAuthHandlers(referenceSpec, subrouter, false)
+			oauthManager := addOAuthHandlers(referenceSpec, subrouter, false)
 			log.Debug("-- Added OAuth Handlers")
 
-			referenceSpec.OAuthManager = thisOauthManager
+			referenceSpec.OAuthManager = oauthManager
 			log.Debug("Done loading OAuth Manager")
 		} else {
 			log.Warning("RPC Emergency mode detected! OAuth APIs will not function!")
@@ -292,7 +290,7 @@ func processSpec(referenceSpec *APISpec,
 	var chain http.Handler
 
 	if referenceSpec.APIDefinition.UseKeylessAccess {
-		thisChainDefinition.Open = true
+		chainDef.Open = true
 		log.WithFields(logrus.Fields{
 			"prefix":   "main",
 			"api_name": referenceSpec.APIDefinition.Name,
@@ -331,9 +329,7 @@ func processSpec(referenceSpec *APISpec,
 			}
 		}
 
-		for _, baseMw := range baseChainArray {
-			chainArray = append(chainArray, baseMw)
-		}
+		chainArray = append(chainArray, baseChainArray...)
 
 		for _, obj := range mwPostFuncs {
 			if mwDriver != tykcommon.OttoDriver {
@@ -378,9 +374,7 @@ func processSpec(referenceSpec *APISpec,
 			}
 		}
 
-		for _, baseMw := range baseChainArray_PreAuth {
-			chainArray = append(chainArray, baseMw)
-		}
+		chainArray = append(chainArray, baseChainArray_PreAuth...)
 
 		// Select the keying method to use for setting session states
 		var authArray = []alice.Constructor{}
@@ -396,7 +390,7 @@ func processSpec(referenceSpec *APISpec,
 
 		useCoProcessAuth := EnableCoProcess && mwDriver != tykcommon.OttoDriver && referenceSpec.EnableCoProcessAuth
 
-		var useOttoAuth bool = false
+		useOttoAuth := false
 		if !useCoProcessAuth {
 			useOttoAuth = mwDriver == tykcommon.OttoDriver && referenceSpec.EnableCoProcessAuth
 		}
@@ -474,9 +468,7 @@ func processSpec(referenceSpec *APISpec,
 			authArray = append(authArray, CreateMiddleware(&AuthKey{tykMiddleware}, tykMiddleware))
 		}
 
-		for _, authMw := range authArray {
-			chainArray = append(chainArray, authMw)
-		}
+		chainArray = append(chainArray, authArray...)
 
 		for _, obj := range mwPostAuthCheckFuncs {
 			log.WithFields(logrus.Fields{
@@ -498,9 +490,7 @@ func processSpec(referenceSpec *APISpec,
 		AppendMiddleware(&baseChainArray_PostAuth, &TransformMethod{TykMiddleware: tykMiddleware}, tykMiddleware)
 		AppendMiddleware(&baseChainArray_PostAuth, &VirtualEndpoint{TykMiddleware: tykMiddleware}, tykMiddleware)
 
-		for _, baseMw := range baseChainArray_PostAuth {
-			chainArray = append(chainArray, baseMw)
-		}
+		chainArray = append(chainArray, baseChainArray_PostAuth...)
 
 		for _, obj := range mwPostFuncs {
 			if mwDriver != tykcommon.OttoDriver {
@@ -535,17 +525,9 @@ func processSpec(referenceSpec *APISpec,
 			CreateMiddleware(&AccessRightsCheck{tykMiddleware}, tykMiddleware)}
 
 		var fullSimpleChain = []alice.Constructor{}
-		for _, mw := range simpleChain_PreAuth {
-			fullSimpleChain = append(fullSimpleChain, mw)
-		}
-
-		for _, authMw := range authArray {
-			fullSimpleChain = append(fullSimpleChain, authMw)
-		}
-
-		for _, mw := range simpleChain_PostAuth {
-			fullSimpleChain = append(fullSimpleChain, mw)
-		}
+		fullSimpleChain = append(fullSimpleChain, simpleChain_PreAuth...)
+		fullSimpleChain = append(fullSimpleChain, authArray...)
+		fullSimpleChain = append(fullSimpleChain, simpleChain_PostAuth...)
 
 		simpleChain := alice.New(fullSimpleChain...).Then(userCheckHandler)
 
@@ -555,8 +537,8 @@ func processSpec(referenceSpec *APISpec,
 			"api_name": referenceSpec.APIDefinition.Name,
 		}).Debug("Rate limit endpoint is: ", rateLimitPath)
 		//subrouter.Handle(rateLimitPath, simpleChain)
-		thisChainDefinition.RateLimitPath = rateLimitPath
-		thisChainDefinition.RateLimitChain = simpleChain
+		chainDef.RateLimitPath = rateLimitPath
+		chainDef.RateLimitChain = simpleChain
 	}
 
 	log.WithFields(logrus.Fields{
@@ -565,12 +547,12 @@ func processSpec(referenceSpec *APISpec,
 	}).Debug("Setting Listen Path: ", referenceSpec.Proxy.ListenPath)
 	//subrouter.Handle(referenceSpec.Proxy.ListenPath+"{rest:.*}", chain)
 
-	thisChainDefinition.ThisHandler = chain
-	thisChainDefinition.ListenOn = referenceSpec.Proxy.ListenPath + "{rest:.*}"
+	chainDef.ThisHandler = chain
+	chainDef.ListenOn = referenceSpec.Proxy.ListenPath + "{rest:.*}"
 
 	notifyAPILoaded(referenceSpec)
 
-	return &thisChainDefinition
+	return &chainDef
 }
 
 // Create the individual API (app) specs based on live configurations and assign middleware
@@ -581,7 +563,7 @@ func loadApps(APISpecs *[]*APISpec, Muxer *mux.Router) {
 		"prefix": "main",
 	}).Info("Loading API configurations.")
 
-	var tempSpecRegister = make(map[string]*APISpec)
+	tmpSpecRegister := make(map[string]*APISpec)
 
 	// Only create this once, add other types here as needed, seems wasteful but we can let the GC handle it
 	redisStore, redisOrgStore, healthStore, rpcAuthStore, rpcOrgStore := prepareStorage()
@@ -589,62 +571,46 @@ func loadApps(APISpecs *[]*APISpec, Muxer *mux.Router) {
 	prepareSortOrder(APISpecs)
 
 	chainChannel := make(chan *ChainObject)
-	var wg sync.WaitGroup
 
-	wg.Add(len(*APISpecs))
 	// Create a new handler for each API spec
 	loadList := make([]*ChainObject, len(*APISpecs))
 	generateListenPathMap(APISpecs)
 	for i, referenceSpec := range *APISpecs {
-		var subrouter *mux.Router
-
-		go func(chChan chan *ChainObject, referenceSpec *APISpec, i int, subrouter *mux.Router) {
-			defer wg.Done()
+		go func(referenceSpec *APISpec, i int) {
+			subrouter := Muxer
 			// Handle custom domains
-			if config.EnableCustomDomains {
-				if referenceSpec.Domain != "" {
-					log.WithFields(logrus.Fields{
-						"prefix":   "main",
-						"api_name": referenceSpec.APIDefinition.Name,
-						"domain":   referenceSpec.Domain,
-					}).Info("Custom Domain set.")
-					subrouter = mainRouter.Host(referenceSpec.Domain).Subrouter()
-				} else {
-					subrouter = Muxer
-				}
-			} else {
-				subrouter = Muxer
+			if config.EnableCustomDomains && referenceSpec.Domain != "" {
+				log.WithFields(logrus.Fields{
+					"prefix":   "main",
+					"api_name": referenceSpec.APIDefinition.Name,
+					"domain":   referenceSpec.Domain,
+				}).Info("Custom Domain set.")
+				subrouter = mainRouter.Host(referenceSpec.Domain).Subrouter()
 			}
-
-			thisChainObject := processSpec(referenceSpec, Muxer, i, redisStore, redisOrgStore, healthStore, rpcAuthStore, rpcOrgStore, subrouter)
-			thisChainObject.Index = i
-			chChan <- thisChainObject
-		}(chainChannel, referenceSpec, i, subrouter)
+			chainObj := processSpec(referenceSpec, Muxer, i, redisStore, redisOrgStore, healthStore, rpcAuthStore, rpcOrgStore, subrouter)
+			chainObj.Index = i
+			chainChannel <- chainObj
+		}(referenceSpec, i)
 
 		// TODO: This will not deal with skipped APis well
-		tempSpecRegister[referenceSpec.APIDefinition.APIID] = referenceSpec
+		tmpSpecRegister[referenceSpec.APIDefinition.APIID] = referenceSpec
 	}
 
-	go func() {
-		for thisCHObj := range chainChannel {
-			loadList[thisCHObj.Index] = thisCHObj
-		}
-	}()
+	for range *APISpecs {
+		chObj := <-chainChannel
+		loadList[chObj.Index] = chObj
+	}
 
-	wg.Wait()
-
-	time.Sleep(1 * time.Second)
-
-	for _, thisChainObject := range loadList {
-		if !thisChainObject.Skip {
-			if !thisChainObject.Open {
-				thisChainObject.Subrouter.Handle(thisChainObject.RateLimitPath, thisChainObject.RateLimitChain)
+	for _, chainObj := range loadList {
+		if !chainObj.Skip {
+			if !chainObj.Open {
+				chainObj.Subrouter.Handle(chainObj.RateLimitPath, chainObj.RateLimitChain)
 			}
 
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
-			}).Info("Processed and listening on: ", thisChainObject.ListenOn)
-			thisChainObject.Subrouter.Handle(thisChainObject.ListenOn, thisChainObject.ThisHandler)
+			}).Info("Processed and listening on: ", chainObj.ListenOn)
+			chainObj.Subrouter.Handle(chainObj.ListenOn, chainObj.ThisHandler)
 		}
 	}
 
@@ -653,12 +619,12 @@ func loadApps(APISpecs *[]*APISpec, Muxer *mux.Router) {
 	Muxer.HandleFunc("/hello", pingTest)
 
 	// Swap in the new register
-	ApiSpecRegister = &tempSpecRegister
+	ApiSpecRegister = tmpSpecRegister
 
 	log.Debug("Checker host list")
 
 	// Kick off our host checkers
-	if config.UptimeTests.Disable == false {
+	if !config.UptimeTests.Disable {
 		SetCheckerHostList()
 	}
 

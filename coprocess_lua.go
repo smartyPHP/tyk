@@ -24,24 +24,24 @@ static void LoadMiddleware(char* middleware_file, char* middleware_contents) {
 }
 
 static void LoadMiddlewareIntoState(lua_State* L, char* middleware_name, char* middleware_contents) {
-  luaL_dostring(L, middleware_contents);
+	luaL_dostring(L, middleware_contents);
 }
 
 static struct CoProcessMessage* LuaDispatchHook(struct CoProcessMessage* object) {
 
-  struct CoProcessMessage* outputObject = malloc(sizeof *outputObject);
+	struct CoProcessMessage* outputObject = malloc(sizeof *outputObject);
 
-  lua_State *L = luaL_newstate();
+	lua_State *L = luaL_newstate();
 
-  luaL_openlibs(L);
-  // luaL_dofile(L, "coprocess/lua/tyk/core.lua");
-  LoadCachedModules(L);
+	luaL_openlibs(L);
+	// luaL_dofile(L, "coprocess/lua/tyk/core.lua");
+	LoadCachedModules(L);
 
-  LoadCachedMiddleware(L);
-  lua_getglobal(L, "dispatch");
+	LoadCachedMiddleware(L);
+	lua_getglobal(L, "dispatch");
 
-  lua_pushlstring(L, object->p_data, object->length);
-  int call_result = lua_pcall(L, 1, 2, 0);
+	lua_pushlstring(L, object->p_data, object->length);
+	int call_result = lua_pcall(L, 1, 2, 0);
 
 	size_t lua_output_length = lua_tointeger(L, -1);
 	const char* lua_output_data = lua_tolstring(L, 0, &lua_output_length);
@@ -49,12 +49,12 @@ static struct CoProcessMessage* LuaDispatchHook(struct CoProcessMessage* object)
 	char* output = malloc(lua_output_length);
 	memmove(output, lua_output_data, lua_output_length);
 
-  lua_close(L);
+	lua_close(L);
 
-  outputObject->p_data = (void*)output;
-  outputObject->length = lua_output_length;
+	outputObject->p_data = (void*)output;
+	outputObject->length = lua_output_length;
 
-  return outputObject;
+	return outputObject;
 }
 
 static void LuaDispatchEvent(char* event_json) {
@@ -83,7 +83,7 @@ import (
 )
 
 // CoProcessName specifies the driver name.
-const CoProcessName string = "lua"
+const CoProcessName = "lua"
 
 const (
 	// ModuleBasePath points to the Tyk modules path.
@@ -95,9 +95,9 @@ const (
 // MessageType sets the default message type.
 var MessageType = coprocess.JsonMessage
 
-// gMiddlewareCache will hold a pointer to LuaDispatcher.gMiddlewareCache.
-var gMiddlewareCache *map[string]string
-var gModuleCache *map[string]string
+// gMiddlewareCache will hold LuaDispatcher.gMiddlewareCache.
+var gMiddlewareCache map[string]string
+var gModuleCache map[string]string
 
 // LuaDispatcher implements a coprocess.Dispatcher
 type LuaDispatcher struct {
@@ -126,7 +126,7 @@ func (d *LuaDispatcher) Reload() {
 
 	if d.MiddlewareCache == nil {
 		d.MiddlewareCache = make(map[string]string, len(files))
-		gMiddlewareCache = &d.MiddlewareCache
+		gMiddlewareCache = d.MiddlewareCache
 	} else {
 		for k := range d.MiddlewareCache {
 			delete(d.MiddlewareCache, k)
@@ -146,7 +146,7 @@ func (d *LuaDispatcher) Reload() {
 	}
 }
 
-func (d* LuaDispatcher) HandleMiddlewareCache(b *tykcommon.BundleManifest, basePath string) {
+func (d *LuaDispatcher) HandleMiddlewareCache(b *tykcommon.BundleManifest, basePath string) {
 	for _, f := range b.FileList {
 		fullPath := filepath.Join(basePath, f)
 		contents, err := ioutil.ReadFile(fullPath)
@@ -167,7 +167,7 @@ func (d *LuaDispatcher) LoadModules() {
 
 	if d.ModuleCache == nil {
 		d.ModuleCache = make(map[string]string, 0)
-		gModuleCache = &d.ModuleCache
+		gModuleCache = d.ModuleCache
 	}
 
 	middlewarePath := path.Join(ModuleBasePath, "bundle.lua")
@@ -184,7 +184,7 @@ func (d *LuaDispatcher) LoadModules() {
 
 //export LoadCachedModules
 func LoadCachedModules(luaState unsafe.Pointer) {
-	for moduleName, moduleContents := range *gModuleCache {
+	for moduleName, moduleContents := range gModuleCache {
 		var cModuleName, cModuleContents *C.char
 		cModuleName = C.CString(moduleName)
 		cModuleContents = C.CString(moduleContents)
@@ -197,7 +197,7 @@ func LoadCachedModules(luaState unsafe.Pointer) {
 
 //export LoadCachedMiddleware
 func LoadCachedMiddleware(luaState unsafe.Pointer) {
-	for middlewareName, middlewareContents := range *gMiddlewareCache {
+	for middlewareName, middlewareContents := range gMiddlewareCache {
 		var cMiddlewareName, cMiddlewareContents *C.char
 		cMiddlewareName = C.CString(middlewareName)
 		cMiddlewareContents = C.CString(middlewareContents)

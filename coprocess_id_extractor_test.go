@@ -48,7 +48,7 @@ func TestValueExtractorHeaderSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chain := getBasicAuthChain(*spec)
+	chain := getBasicAuthChain(spec)
 	chain.ServeHTTP(recorder, req)
 
 	var returnOverrides ReturnOverrides
@@ -86,7 +86,7 @@ func TestValueExtractorFormSource(t *testing.T) {
 	uri := "/"
 	method := "POST"
 
-	var authValue string = "abc"
+	var authValue = "abc"
 
 	form := url.Values{}
 	form.Add("auth", authValue)
@@ -101,7 +101,7 @@ func TestValueExtractorFormSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chain := getBasicAuthChain(*spec)
+	chain := getBasicAuthChain(spec)
 	chain.ServeHTTP(recorder, req)
 
 	var returnOverrides ReturnOverrides
@@ -146,7 +146,7 @@ func TestValueExtractorHeaderSourceValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chain := getBasicAuthChain(*spec)
+	chain := getBasicAuthChain(spec)
 	chain.ServeHTTP(recorder, req)
 
 	var returnOverrides ReturnOverrides
@@ -190,7 +190,7 @@ func TestRegexExtractorHeaderSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chain := getBasicAuthChain(*spec)
+	chain := getBasicAuthChain(spec)
 	chain.ServeHTTP(recorder, req)
 
 	// var returnOverrides ReturnOverrides
@@ -212,7 +212,7 @@ func computeSessionID(input []byte, tykMiddleware *TykMiddleware) (sessionID str
 	return sessionID
 }
 
-var IdExtractorCoProcessDef string = `
+var IdExtractorCoProcessDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -253,21 +253,21 @@ var IdExtractorCoProcessDef string = `
 			}
 		},
 		"custom_middleware": {
-      "pre": [
-        {
-          "name": "MyPreMiddleware",
-          "require_session": false
-        }
-      ],
-      "id_extractor": {
-        "extract_from": "header",
-        "extract_with": "value",
-        "extractor_config": {
-          "header_name": "Authorization"
-        }
-      },
-      "driver": "grpc"
-    },
+			"pre": [
+			{
+				"name": "MyPreMiddleware",
+				"require_session": false
+			}
+			],
+			"id_extractor": {
+				"extract_from": "header",
+				"extract_with": "value",
+				"extractor_config": {
+					"header_name": "Authorization"
+				}
+			},
+			"driver": "grpc"
+		},
 		"proxy": {
 			"listen_path": "/v1",
 			"target_url": "http://httpbin.org",
@@ -276,7 +276,7 @@ var IdExtractorCoProcessDef string = `
 	}
 `
 
-var ValueExtractorFormSource string = `
+var ValueExtractorFormSource = `
 
 	{
 		"name": "Tyk Test API",
@@ -317,30 +317,30 @@ var ValueExtractorFormSource string = `
 			}
 		},
 		"custom_middleware": {
-      "pre": [
-        {
-          "name": "MyPreMiddleware",
-          "require_session": false
-        }
-      ],
-      "id_extractor": {
-        "extract_from": "form",
-        "extract_with": "value",
-        "extractor_config": {
+			"pre": [
+			{
+				"name": "MyPreMiddleware",
+				"require_session": false
+			}
+			],
+			"id_extractor": {
+				"extract_from": "form",
+				"extract_with": "value",
+				"extractor_config": {
 					"param_name": "auth"
-        }
-      },
-      "driver": "grpc"
-    },
+				}
+			},
+			"driver": "grpc"
+		},
 		"proxy": {
 			"listen_path": "/v1",
 			"target_url": "http://httpbin.org",
 			"strip_listen_path": false
 		}
 	}
-`
+	`
 
-var RegexExtractorDef string = `
+var RegexExtractorDef = `
 
 	{
 		"name": "Tyk Test API - ValueExtractor/XPath",
@@ -382,16 +382,16 @@ var RegexExtractorDef string = `
 		},
 		"custom_middleware": {
 			"id_extractor": {
-        "extract_from": "header",
-        "extract_with": "regex",
-        "extractor_config": {
-          "header_name": "Authorization",
-          "regex_expression": "[^\\\\-]+",
+				"extract_from": "header",
+				"extract_with": "regex",
+				"extractor_config": {
+					"header_name": "Authorization",
+					"regex_expression": "[^\\\\-]+",
 					"regex_match_index": 1
-        }
-      },
-      "driver": "grpc"
-    },
+				}
+			},
+			"driver": "grpc"
+		},
 		"proxy": {
 			"listen_path": "/v1",
 			"target_url": "http://httpbin.org",

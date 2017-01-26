@@ -42,8 +42,8 @@ func (m *RedisCacheMiddleware) New() {
 
 func (m *RedisCacheMiddleware) IsEnabledForSpec() bool {
 	var used bool
-	for _, thisVersion := range m.TykMiddleware.Spec.VersionData.Versions {
-		if len(thisVersion.ExtendedPaths.Cached) > 0 {
+	for _, version := range m.TykMiddleware.Spec.VersionData.Versions {
+		if len(version.ExtendedPaths.Cached) > 0 {
 			used = true
 		}
 	}
@@ -53,8 +53,7 @@ func (m *RedisCacheMiddleware) IsEnabledForSpec() bool {
 
 // GetConfig retrieves the configuration from the API config - we user mapstructure for this for simplicity
 func (m *RedisCacheMiddleware) GetConfig() (interface{}, error) {
-	var thisModuleConfig RedisCacheMiddlewareConfig
-	return thisModuleConfig, nil
+	return RedisCacheMiddlewareConfig{}, nil
 }
 
 func (m RedisCacheMiddleware) CreateCheckSum(req *http.Request, keyName string) string {
@@ -77,13 +76,10 @@ func GetIP(ip string) (string, error) {
 	} else {
 		if len(IPWithoutPort) == 1 {
 			return ip, nil
-		} else {
-			log.Warning(IPWithoutPort)
-			return ip, errors.New("IP Address malformed")
 		}
-
+		log.Warning(IPWithoutPort)
+		return ip, errors.New("IP Address malformed")
 	}
-
 	return ip, nil
 }
 
@@ -149,7 +145,7 @@ func (m *RedisCacheMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Req
 	var stat RequestStatus
 	var isVirtual bool
 	// Only allow idempotent (safe) methods
-	if r.Method == "GET" || r.Method == "OPTIONS" || r.Method == "HEAD" {
+	if r.Method == "GET" || r.Method == "HEAD" {
 		// Lets see if we can throw a sledgehammer at this
 		if m.Spec.APIDefinition.CacheOptions.CacheAllSafeRequests {
 			stat = StatusCached
@@ -166,14 +162,13 @@ func (m *RedisCacheMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Req
 		// Cached route matched, let go
 		if stat == StatusCached {
 			var authHeaderValue string
-			var ipErr error
 			authVal := context.Get(r, AuthHeaderValue)
 
 			// No authentication data? use the IP.
 			if authVal == nil {
-				authHeaderValue, ipErr = GetIP(GetIPFromRequest(r))
-				if ipErr != nil {
-					log.Error(ipErr)
+				var err error
+				if authHeaderValue, err = GetIP(GetIPFromRequest(r)); err != nil {
+					log.Error(err)
 					return nil, 200
 				}
 			} else {
@@ -185,19 +180,18 @@ func (m *RedisCacheMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Req
 				copiedRequest = CopyHttpRequest(r)
 			}
 
-			thisKey := m.CreateCheckSum(r, authHeaderValue)
-			retBlob, found := m.CacheStore.GetKey(thisKey)
+			key := m.CreateCheckSum(r, authHeaderValue)
+			retBlob, found := m.CacheStore.GetKey(key)
 			if found != nil {
 				log.Debug("Cache enabled, but record not found")
 				// Pass through to proxy AND CACHE RESULT
 
-				reqVal := new(http.Response)
-
+				var reqVal *http.Response
 				if isVirtual {
 					log.Debug("This is a virtual function")
-					thisVP := VirtualEndpoint{TykMiddleware: m.TykMiddleware}
-					thisVP.New()
-					reqVal = thisVP.ServeHTTPForCache(w, r)
+					vp := VirtualEndpoint{TykMiddleware: m.TykMiddleware}
+					vp.New()
+					reqVal = vp.ServeHTTPForCache(w, r)
 				} else {
 					// This passes through and will write the value to the writer, but spit out a copy for the cache
 					log.Debug("Not virtual, passing")
@@ -256,27 +250,27 @@ func (m *RedisCacheMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Req
 					log.Debug("Cache TTL is:", cacheTTL)
 					ts := m.getTimeTTL(cacheTTL)
 					toStore := m.encodePayload(wireFormatReq.String(), ts)
-					go m.CacheStore.SetKey(thisKey, toStore, cacheTTL)
+					go m.CacheStore.SetKey(key, toStore, cacheTTL)
 
 				}
 				return nil, 666
 
 			}
 
-			cachedData, timestamp, decErr := m.decodePayload(string(retBlob))
+			cachedData, timestamp, decErr := m.decodePayload(retBlob)
 			if decErr != nil {
 				// Tere was an issue with this cache entry - lets remove it:
-				m.CacheStore.DeleteKey(thisKey)
+				m.CacheStore.DeleteKey(key)
 				return nil, 200
 			}
 
 			if m.isTimeStampExpired(timestamp) {
-				m.CacheStore.DeleteKey(thisKey)
+				m.CacheStore.DeleteKey(key)
 				return nil, 200
 			}
 
 			if len(cachedData) == 0 {
-				m.CacheStore.DeleteKey(thisKey)
+				m.CacheStore.DeleteKey(key)
 				return nil, 200
 			}
 
@@ -296,21 +290,21 @@ func (m *RedisCacheMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Req
 
 			copyHeader(w.Header(), newRes.Header)
 			sessObj := context.Get(r, SessionData)
-			var thisSessionState SessionState
+			var sessionState SessionState
 
 			// Only add ratelimit data to keyed sessions
 			if sessObj != nil {
-				thisSessionState = sessObj.(SessionState)
-				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(int(thisSessionState.QuotaMax)))
-				w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(int(thisSessionState.QuotaRemaining)))
-				w.Header().Set("X-RateLimit-Reset", strconv.Itoa(int(thisSessionState.QuotaRenews)))
+				sessionState = sessObj.(SessionState)
+				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(int(sessionState.QuotaMax)))
+				w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(int(sessionState.QuotaRemaining)))
+				w.Header().Set("X-RateLimit-Reset", strconv.Itoa(int(sessionState.QuotaRenews)))
 			}
 			w.Header().Add("x-tyk-cached-response", "1")
 			w.WriteHeader(newRes.StatusCode)
 			m.Proxy.CopyResponse(w, newRes.Body)
 
 			// Record analytics
-			if m.Spec.DoNotTrack == false {
+			if !m.Spec.DoNotTrack {
 				go m.sh.RecordHit(w, r, 0, newRes.StatusCode, copiedRequest, nil)
 			}
 

@@ -1,15 +1,14 @@
 package main
 
 import (
-	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/goverify"
+	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/tykcommon"
 
 	"archive/zip"
 	"bytes"
 	"crypto/md5"
 	b64 "encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,10 +61,6 @@ func (b *Bundle) Verify() (err error) {
 		useSignature = true
 	}
 
-	h := md5.New()
-	h.Write(b.Data)
-	checksum := hex.EncodeToString(h.Sum(nil))
-
 	var bundleData bytes.Buffer
 
 	for _, f := range b.Manifest.FileList {
@@ -80,7 +75,7 @@ func (b *Bundle) Verify() (err error) {
 		bundleData.Write(data)
 	}
 
-	checksum = fmt.Sprintf("%x", md5.Sum(bundleData.Bytes()))
+	checksum := fmt.Sprintf("%x", md5.Sum(bundleData.Bytes()))
 
 	if checksum != b.Manifest.Checksum {
 		err = errors.New("Invalid checksum")
@@ -92,7 +87,7 @@ func (b *Bundle) Verify() (err error) {
 		if err != nil {
 			return err
 		}
-		err = bundleVerifier.Verify([]byte(bundleData.Bytes()), signed)
+		err = bundleVerifier.Verify(bundleData.Bytes(), signed)
 		if err != nil {
 			return err
 		}
@@ -145,8 +140,7 @@ type BundleSaver interface {
 }
 
 // ZipBundleSaver is a BundleSaver for ZIP files.
-type ZipBundleSaver struct {
-}
+type ZipBundleSaver struct{}
 
 // Save implements the main method of the BundleSaver interface. It makes use of archive/zip.
 func (s *ZipBundleSaver) Save(bundle *Bundle, bundlePath string, spec *APISpec) (err error) {
@@ -187,43 +181,44 @@ func (s *ZipBundleSaver) Save(bundle *Bundle, bundlePath string, spec *APISpec) 
 }
 
 // fetchBundle will fetch a given bundle, using the right BundleGetter. The first argument is the bundle name, the base bundle URL will be used as prefix.
-func fetchBundle(spec *APISpec) (thisBundle Bundle, err error) {
+func fetchBundle(spec *APISpec) (bundle Bundle, err error) {
 
 	if !config.EnableBundleDownloader {
 		log.WithFields(logrus.Fields{
 			"prefix": "main",
 		}).Warning("Bundle downloader is disabled.")
-		err = errors.New("Bundle downloader is disabled.")
-		return thisBundle, err
+		err = errors.New("Bundle downloader is disabled")
+		return bundle, err
 	}
 
 	var bundleUrl string
 
 	bundleUrl = strings.Join([]string{config.BundleBaseURL, spec.CustomMiddlewareBundle}, "")
 
-	var thisGetter BundleGetter
+	var getter BundleGetter
 
-	var u *url.URL
-	u, err = url.Parse(bundleUrl)
-
+	u, err := url.Parse(bundleUrl)
 	switch u.Scheme {
 	case "http":
-		thisGetter = &HttpBundleGetter{
+		getter = &HttpBundleGetter{
 			Url: bundleUrl,
 		}
 	default:
-		err = errors.New("Unknown URL scheme!")
+		err = errors.New("unknown URL scheme")
+	}
+	if err != nil {
+		return Bundle{}, err
 	}
 
-	bundleData, err := thisGetter.Get()
+	bundleData, err := getter.Get()
 
-	thisBundle = Bundle{
+	bundle = Bundle{
 		Name: spec.CustomMiddlewareBundle,
 		Data: bundleData,
 		Spec: spec,
 	}
 
-	return thisBundle, err
+	return bundle, err
 }
 
 // saveBundle will save a bundle to the disk, see ZipBundleSaver methods for reference.
@@ -252,6 +247,9 @@ func loadBundleManifest(bundle *Bundle, spec *APISpec, skipVerification bool) (e
 	manifestPath := filepath.Join(bundle.Path, "manifest.json")
 	var manifestData []byte
 	manifestData, err = ioutil.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
 
 	err = json.Unmarshal(manifestData, &bundle.Manifest)
 
@@ -387,17 +385,4 @@ func bundleError(spec *APISpec, err error, message string) {
 		"api_id":      spec.APIDefinition.APIID,
 		"path":        "-",
 	}).Error(message, ": ", err)
-}
-
-// getBundlePaths will return an array of the available bundle directories:
-func getBundlePaths() []string {
-	directories := make([]string, 0)
-	bundles, _ := ioutil.ReadDir(tykBundlePath)
-	for _, f := range bundles {
-		if f.IsDir() {
-			fullPath := filepath.Join(tykBundlePath, f.Name())
-			directories = append(directories, fullPath)
-		}
-	}
-	return directories
 }

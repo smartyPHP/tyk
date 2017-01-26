@@ -58,7 +58,7 @@ func (k *Oauth2KeyExists) ProcessRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	accessToken := parts[1]
-	thisSessionState, keyExists := k.TykMiddleware.CheckSessionAndIdentityForValidKey(accessToken)
+	sessionState, keyExists := k.TykMiddleware.CheckSessionAndIdentityForValidKey(accessToken)
 
 	if !keyExists {
 		log.WithFields(logrus.Fields{
@@ -76,8 +76,9 @@ func (k *Oauth2KeyExists) ProcessRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Set session state on context, we will need it later
-	if (k.TykMiddleware.Spec.BaseIdentityProvidedBy == tykcommon.OAuthKey) || (k.TykMiddleware.Spec.BaseIdentityProvidedBy == tykcommon.UnsetAuth) {
-		context.Set(r, SessionData, thisSessionState)
+	switch k.TykMiddleware.Spec.BaseIdentityProvidedBy {
+	case tykcommon.OAuthKey, tykcommon.UnsetAuth:
+		context.Set(r, SessionData, sessionState)
 		context.Set(r, AuthHeaderValue, accessToken)
 	}
 

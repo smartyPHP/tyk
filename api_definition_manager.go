@@ -4,7 +4,6 @@ import (
 	b64 "encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -14,7 +13,6 @@ import (
 	textTemplate "text/template"
 	"time"
 
-	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/tykcommon"
 	"github.com/gorilla/context"
 	"github.com/rubyist/circuitbreaker"
@@ -35,22 +33,23 @@ type URLStatus int
 // Enums representing the various statuses for a VersionInfo Path match during a
 // proxy request
 const (
-	Ignored                URLStatus = 1
-	WhiteList              URLStatus = 2
-	BlackList              URLStatus = 3
-	Cached                 URLStatus = 4
-	Transformed            URLStatus = 5
-	HeaderInjected         URLStatus = 6
-	HeaderInjectedResponse URLStatus = 7
-	TransformedResponse    URLStatus = 8
-	HardTimeout            URLStatus = 9
-	CircuitBreaker         URLStatus = 10
-	URLRewrite             URLStatus = 11
-	VirtualPath            URLStatus = 12
-	RequestSizeLimit       URLStatus = 13
-	MethodTransformed      URLStatus = 14
-	RequestTracked         URLStatus = 15
-	RequestNotTracked      URLStatus = 16
+	_ URLStatus = iota
+	Ignored
+	WhiteList
+	BlackList
+	Cached
+	Transformed
+	HeaderInjected
+	HeaderInjectedResponse
+	TransformedResponse
+	HardTimeout
+	CircuitBreaker
+	URLRewrite
+	VirtualPath
+	RequestSizeLimit
+	MethodTransformed
+	RequestTracked
+	RequestNotTracked
 )
 
 // RequestStatus is a custom type to avoid collisions
@@ -60,11 +59,9 @@ type RequestStatus string
 const (
 	VersionNotFound                RequestStatus = "Version information not found"
 	VersionDoesNotExist            RequestStatus = "This API version does not seem to exist"
-	VersionPathsNotFound           RequestStatus = "Path information could not be found for version"
 	VersionWhiteListStatusNotFound               = "WhiteListStatus for path not found"
 	VersionExpired                 RequestStatus = "Api Version has expired, please check documentation or contact administrator"
 	EndPointNotAllowed             RequestStatus = "Requested endpoint is forbidden"
-	GeneralFailure                 RequestStatus = "An error occured that should have not been possible"
 	StatusOkAndIgnore              RequestStatus = "Everything OK, passing and not filtering"
 	StatusOk                       RequestStatus = "Everything OK, passing"
 	StatusCached                   RequestStatus = "Cached path"
@@ -73,7 +70,6 @@ const (
 	StatusHeaderInjected           RequestStatus = "Header injected"
 	StatusMethodTransformed        RequestStatus = "Method Transformed"
 	StatusHeaderInjectedResponse   RequestStatus = "Header injected on response"
-	StatusActionRedirect           RequestStatus = "Found an Action, changing route"
 	StatusRedirectFlowByReply      RequestStatus = "Exceptional action requested, redirecting flow!"
 	StatusHardTimeout              RequestStatus = "Hard Timeout enforced on path"
 	StatusCircuitBreaker           RequestStatus = "Circuit breaker enforced"
@@ -118,7 +114,7 @@ type ExtendedCircuitBreakerMeta struct {
 // APISpec represents a path specification for an API, to avoid enumerating multiple nested lists, a single
 // flattened URL list is checked for matching paths and then it's status evaluated if found.
 type APISpec struct {
-	tykcommon.APIDefinition
+	*tykcommon.APIDefinition
 
 	RxPaths                  map[string][]URLSpec
 	WhiteListEnabled         map[string]bool
@@ -150,23 +146,11 @@ type APIDefinitionLoader struct {
 // Nonce to use when interacting with the dashboard service
 var ServiceNonce string
 
-// Connect connects to the storage engine - can be null
-func (a *APIDefinitionLoader) Connect() {
-	log.Warning("MongoDB Driver no longer implemented")
-}
-
-// Connect connects to the storage engine - can be null
-func (a *APIDefinitionLoader) Disconnect() {
-	if a.dbSession != nil {
-		a.dbSession.Close()
-	}
-}
-
 // MakeSpec will generate a flattened URLSpec from and APIDefinitions' VersionInfo data. paths are
 // keyed to the Api version name, which is determined during routing to speed up lookups
-func (a *APIDefinitionLoader) MakeSpec(thisAppConfig tykcommon.APIDefinition) APISpec {
-	newAppSpec := APISpec{}
-	newAppSpec.APIDefinition = thisAppConfig
+func (a *APIDefinitionLoader) MakeSpec(appConfig *tykcommon.APIDefinition) *APISpec {
+	newAppSpec := &APISpec{}
+	newAppSpec.APIDefinition = appConfig
 
 	// We'll push the default HealthChecker:
 	newAppSpec.Health = &DefaultHealthChecker{
@@ -208,17 +192,17 @@ func (a *APIDefinitionLoader) MakeSpec(thisAppConfig tykcommon.APIDefinition) AP
 	// Set up Event Handlers
 	log.Debug("INITIALISING EVENT HANDLERS")
 	newAppSpec.EventPaths = make(map[tykcommon.TykEvent][]TykEventHandler)
-	for eventName, eventHandlerConfs := range thisAppConfig.EventHandlers.Events {
+	for eventName, eventHandlerConfs := range appConfig.EventHandlers.Events {
 		log.Debug("FOUND EVENTS TO INIT")
 		for _, handlerConf := range eventHandlerConfs {
 			log.Debug("CREATING EVENT HANDLERS")
-			thisEventHandlerInstance, getHandlerErr := GetEventHandlerByName(handlerConf, &newAppSpec)
+			eventHandlerInstance, err := GetEventHandlerByName(handlerConf, newAppSpec)
 
-			if getHandlerErr != nil {
-				log.Error("Failed to init event handler: ", getHandlerErr)
+			if err != nil {
+				log.Error("Failed to init event handler: ", err)
 			} else {
 				log.Debug("Init Event Handler: ", eventName)
-				newAppSpec.EventPaths[eventName] = append(newAppSpec.EventPaths[eventName], thisEventHandlerInstance)
+				newAppSpec.EventPaths[eventName] = append(newAppSpec.EventPaths[eventName], eventHandlerInstance)
 			}
 
 		}
@@ -226,13 +210,13 @@ func (a *APIDefinitionLoader) MakeSpec(thisAppConfig tykcommon.APIDefinition) AP
 
 	newAppSpec.RxPaths = make(map[string][]URLSpec)
 	newAppSpec.WhiteListEnabled = make(map[string]bool)
-	for _, v := range thisAppConfig.VersionData.Versions {
+	for _, v := range appConfig.VersionData.Versions {
 		var pathSpecs []URLSpec
 		var whiteListSpecs bool
 
 		// If we have transitioned to extended path specifications, we should use these now
 		if v.UseExtendedPaths {
-			pathSpecs, whiteListSpecs = a.getExtendedPathSpecs(v, &newAppSpec)
+			pathSpecs, whiteListSpecs = a.getExtendedPathSpecs(v, newAppSpec)
 
 		} else {
 			log.Warning("Legacy path detected! Upgrade to extended.")
@@ -255,141 +239,6 @@ func (a *APIDefinitionLoader) readBody(response *http.Response) ([]byte, error) 
 
 	return contents, nil
 
-}
-
-func RegisterNodeWithDashboard(endpoint string, secret string) error {
-	// Get the definitions
-	log.Debug("Calling: ", endpoint)
-	newRequest, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		log.Error("Failed to create request: ", err)
-	}
-
-	newRequest.Header.Add("authorization", secret)
-
-	c := &http.Client{
-		Timeout: 20 * time.Second,
-	}
-	response, reqErr := c.Do(newRequest)
-
-	if reqErr != nil {
-		log.Error("Request failed: ", reqErr)
-		time.Sleep(time.Second * 5)
-		return RegisterNodeWithDashboard(endpoint, secret)
-	}
-
-	defer response.Body.Close()
-	retBody, err := ioutil.ReadAll(response.Body)
-
-	if response.StatusCode != 200 {
-		log.Error("Failed to register node, retrying in 5s")
-		log.Debug("Response was: ", string(retBody))
-		time.Sleep(time.Second * 5)
-		return RegisterNodeWithDashboard(endpoint, secret)
-	}
-
-	if err != nil {
-		return err
-	}
-
-	// Extract tagged APIs#
-	type NodeResponseOK struct {
-		Status  string
-		Message map[string]string
-		Nonce   string
-	}
-
-	thisVal := NodeResponseOK{}
-	decErr := json.Unmarshal(retBody, &thisVal)
-	if decErr != nil {
-		log.Error("Failed to decode body: ", decErr)
-		return decErr
-	}
-
-	// Set the NodeID
-	var found bool
-	NodeID, found = thisVal.Message["NodeID"]
-	if !found {
-		log.Error("Failed to register node, retrying in 5s")
-		time.Sleep(time.Second * 5)
-		return RegisterNodeWithDashboard(endpoint, secret)
-	}
-
-	log.WithFields(logrus.Fields{
-		"prefix": "dashboard",
-		"id":     NodeID,
-	}).Info("Node registered")
-
-	// Set the nonce
-	ServiceNonce = thisVal.Nonce
-	log.Debug("Registration Finished: Nonce Set: ", ServiceNonce)
-
-	return nil
-}
-
-func StartBeating(endpoint, secret string) {
-	for {
-		failure := SendHeartBeat(endpoint, secret)
-		if failure != nil {
-			log.Warning(failure)
-		}
-		time.Sleep(time.Second * 5)
-	}
-}
-
-func SendHeartBeat(endpoint string, secret string) error {
-	// Get the definitions
-	log.Debug("Calling: ", endpoint)
-	newRequest, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		log.Error("Failed to create request: ", err)
-	}
-
-	newRequest.Header.Add("authorization", secret)
-	newRequest.Header.Add("x-tyk-nodeid", NodeID)
-	log.Debug("Sending Heartbeat as: ", NodeID)
-
-	newRequest.Header.Add("x-tyk-nonce", ServiceNonce)
-
-	c := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	response, reqErr := c.Do(newRequest)
-	defer response.Body.Close()
-	retBody, err := ioutil.ReadAll(response.Body)
-
-	if reqErr != nil {
-		return fmt.Errorf("Dashboard is down? Heartbeat is failing. (err: %v), response was: %s", reqErr, string(retBody))
-	}
-
-	if response.StatusCode != 200 {
-		return fmt.Errorf("Dashboard is down? Heartbeat is failing. (code invalid: %v), response was: %s", response.StatusCode, string(retBody))
-	}
-
-	if err != nil {
-		return err
-	}
-
-	// Extract tagged APIs#
-	type NodeResponseOK struct {
-		Status  string
-		Message map[string]string
-		Nonce   string
-	}
-
-	thisVal := NodeResponseOK{}
-	decErr := json.Unmarshal(retBody, &thisVal)
-	if decErr != nil {
-		log.Error("Failed to decode body: ", decErr)
-		return decErr
-	}
-
-	// Set the nonce
-
-	ServiceNonce = thisVal.Nonce
-	log.Debug("Hearbeat Finished: Nonce Set: ", ServiceNonce)
-
-	return nil
 }
 
 // LoadDefinitionsFromDashboardService will connect and download ApiDefintions from a Tyk Dashboard instance.
@@ -435,7 +284,7 @@ func (a *APIDefinitionLoader) LoadDefinitionsFromDashboardService(endpoint strin
 	// Extract tagged APIs#
 
 	type ResponseStruct struct {
-		ApiDefinition tykcommon.APIDefinition `bson:"api_definition" json:"api_definition"`
+		ApiDefinition *tykcommon.APIDefinition `bson:"api_definition" json:"api_definition"`
 	}
 	type NodeResponseOK struct {
 		Status  string
@@ -443,40 +292,38 @@ func (a *APIDefinitionLoader) LoadDefinitionsFromDashboardService(endpoint strin
 		Nonce   string
 	}
 
-	thisList := NodeResponseOK{}
+	list := NodeResponseOK{}
 
-	decErr := json.Unmarshal(retBody, &thisList)
-	if decErr != nil {
-		log.Error("Failed to decode body: ", decErr, "Response was: ", string(retBody))
+	if err := json.Unmarshal(retBody, &list); err != nil {
+		log.Error("Failed to decode body: ", err, "Response was: ", string(retBody))
 		log.Info("--> Retrying in 5s")
 		return &APISpecs
 		// return &APISpecs
 	}
 
-	thisRawList := make(map[string]interface{})
-	rawdecErr := json.Unmarshal(retBody, &thisRawList)
+	rawList := make(map[string]interface{})
+	rawdecErr := json.Unmarshal(retBody, &rawList)
 	if rawdecErr != nil {
 		log.Error("Failed to decode body (raw): ", rawdecErr)
 		return &APISpecs
 	}
 
 	// Extract tagged entries only
-	APIDefinitions := make([]tykcommon.APIDefinition, 0)
+	APIDefinitions := make([]*tykcommon.APIDefinition, 0)
 
 	if config.DBAppConfOptions.NodeIsSegmented {
-		APIDefinitions = make([]tykcommon.APIDefinition, 0)
 		tagList := make(map[string]bool)
-		toLoad := make(map[string]tykcommon.APIDefinition)
+		toLoad := make(map[string]*tykcommon.APIDefinition)
 
 		for _, mt := range config.DBAppConfOptions.Tags {
 			tagList[mt] = true
 		}
 
-		for index, apiEntry := range thisList.Message {
+		for index, apiEntry := range list.Message {
 			for _, t := range apiEntry.ApiDefinition.Tags {
 				_, ok := tagList[t]
 				if ok {
-					apiEntry.ApiDefinition.RawData = thisRawList["Message"].([]interface{})[index].(map[string]interface{})["api_definition"].(map[string]interface{})
+					apiEntry.ApiDefinition.RawData = rawList["Message"].([]interface{})[index].(map[string]interface{})["api_definition"].(map[string]interface{})
 					toLoad[apiEntry.ApiDefinition.APIID] = apiEntry.ApiDefinition
 				}
 
@@ -487,20 +334,20 @@ func (a *APIDefinitionLoader) LoadDefinitionsFromDashboardService(endpoint strin
 			APIDefinitions = append(APIDefinitions, apiDef)
 		}
 	} else {
-		for index, apiEntry := range thisList.Message {
-			apiEntry.ApiDefinition.RawData = thisRawList["Message"].([]interface{})[index].(map[string]interface{})["api_definition"].(map[string]interface{})
+		for index, apiEntry := range list.Message {
+			apiEntry.ApiDefinition.RawData = rawList["Message"].([]interface{})[index].(map[string]interface{})["api_definition"].(map[string]interface{})
 			APIDefinitions = append(APIDefinitions, apiEntry.ApiDefinition)
 		}
 	}
 
 	// Process
-	for _, thisAppConfig := range APIDefinitions {
-		newAppSpec := a.MakeSpec(thisAppConfig)
-		APISpecs = append(APISpecs, &newAppSpec)
+	for _, appConfig := range APIDefinitions {
+		newAppSpec := a.MakeSpec(appConfig)
+		APISpecs = append(APISpecs, newAppSpec)
 	}
 
 	// Set the nonce
-	ServiceNonce = thisList.Nonce
+	ServiceNonce = list.Nonce
 	log.Debug("Loading APIS Finished: Nonce Set: ", ServiceNonce)
 
 	return &APISpecs
@@ -534,56 +381,51 @@ func (a *APIDefinitionLoader) LoadDefinitionsFromRPC(orgId string) *[]*APISpec {
 func (a *APIDefinitionLoader) processRPCDefinitions(apiCollection string) *[]*APISpec {
 	var APISpecs = []*APISpec{}
 
-	var APIDefinitions = []tykcommon.APIDefinition{}
+	var APIDefinitions = []*tykcommon.APIDefinition{}
 	var StringDefs = make([]map[string]interface{}, 0)
 
-	jErr1 := json.Unmarshal([]byte(apiCollection), &APIDefinitions)
-
-	if jErr1 != nil {
-		log.Error("Failed decode: ", jErr1)
+	if err := json.Unmarshal([]byte(apiCollection), &APIDefinitions); err != nil {
+		log.Error("Failed decode: ", err)
+		return nil
+	}
+	if err := json.Unmarshal([]byte(apiCollection), &StringDefs); err != nil {
+		log.Error("Failed decode: ", err)
 		return nil
 	}
 
-	jErr2 := json.Unmarshal([]byte(apiCollection), &StringDefs)
-	if jErr2 != nil {
-		log.Error("Failed decode: ", jErr2)
-		return nil
-	}
-
-	for i, thisAppConfig := range APIDefinitions {
-		thisAppConfig.DecodeFromDB()
-		thisAppConfig.RawData = StringDefs[i] // Lets keep a copy for plugable modules
+	for i, appConfig := range APIDefinitions {
+		appConfig.DecodeFromDB()
+		appConfig.RawData = StringDefs[i] // Lets keep a copy for plugable modules
 
 		if config.SlaveOptions.BindToSlugsInsteadOfListenPaths {
-			newListenPath := "/" + thisAppConfig.Slug //+ "/"
+			newListenPath := "/" + appConfig.Slug //+ "/"
 			log.Warning("Binding to ",
 				newListenPath,
 				" instead of ",
-				thisAppConfig.Proxy.ListenPath)
+				appConfig.Proxy.ListenPath)
 
-			thisAppConfig.Proxy.ListenPath = newListenPath
+			appConfig.Proxy.ListenPath = newListenPath
 		}
 
-		newAppSpec := a.MakeSpec(thisAppConfig)
-		APISpecs = append(APISpecs, &newAppSpec)
+		newAppSpec := a.MakeSpec(appConfig)
+		APISpecs = append(APISpecs, newAppSpec)
 	}
 
 	return &APISpecs
 }
 
-func (a *APIDefinitionLoader) ParseDefinition(apiDef []byte) (tykcommon.APIDefinition, map[string]interface{}) {
-	thisAppConfig := tykcommon.APIDefinition{}
-	err := json.Unmarshal(apiDef, &thisAppConfig)
-	if err != nil {
+func (a *APIDefinitionLoader) ParseDefinition(apiDef []byte) (*tykcommon.APIDefinition, map[string]interface{}) {
+	appConfig := &tykcommon.APIDefinition{}
+	if err := json.Unmarshal(apiDef, appConfig); err != nil {
 		log.Error("[RPC] --> Couldn't unmarshal api configuration")
 		log.Error(err)
 	}
 
 	// Got the structured version - now lets get a raw copy for modules
-	thisRawConfig := make(map[string]interface{})
-	json.Unmarshal(apiDef, &thisRawConfig)
+	rawConfig := make(map[string]interface{})
+	json.Unmarshal(apiDef, &rawConfig)
 
-	return thisAppConfig, thisRawConfig
+	return appConfig, rawConfig
 }
 
 // LoadDefinitions will load APIDefinitions from a directory on the filesystem. Definitions need
@@ -596,16 +438,16 @@ func (a *APIDefinitionLoader) LoadDefinitions(dir string) *[]*APISpec {
 		if strings.Contains(f.Name(), ".json") {
 			filePath := filepath.Join(dir, f.Name())
 			log.Info("Loading API Specification from ", filePath)
-			appConfig, err := ioutil.ReadFile(filePath)
-			thisAppConfig, thisRawConfig := a.ParseDefinition(appConfig)
+			appConfigBody, err := ioutil.ReadFile(filePath)
+			appConfig, rawConfig := a.ParseDefinition(appConfigBody)
 			if err != nil {
 				log.Error("Couldn't load app configuration file")
 				log.Error(err)
 			}
 
-			thisAppConfig.RawData = thisRawConfig // Lets keep a copy for plugable modules
-			newAppSpec := a.MakeSpec(thisAppConfig)
-			APISpecs = append(APISpecs, &newAppSpec)
+			appConfig.RawData = rawConfig // Lets keep a copy for plugable modules
+			newAppSpec := a.MakeSpec(appConfig)
+			APISpecs = append(APISpecs, newAppSpec)
 
 		}
 	}
@@ -640,25 +482,24 @@ func (a *APIDefinitionLoader) generateRegex(stringSpec string, newSpec *URLSpec,
 }
 
 func (a *APIDefinitionLoader) compilePathSpec(paths []string, specType URLStatus) []URLSpec {
-
 	// transform a configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
 		a.generateRegex(stringSpec, &newSpec, specType)
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileExtendedPathSpec(paths []tykcommon.EndPointMeta, specType URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
@@ -666,52 +507,47 @@ func (a *APIDefinitionLoader) compileExtendedPathSpec(paths []tykcommon.EndPoint
 
 		// Extend with method actions
 		newSpec.MethodActions = stringSpec.MethodActions
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileCachedPathSpec(paths []string) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
 		a.generateRegex(stringSpec, &newSpec, Cached)
 		// Extend with method actions
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) loadFileTemplate(path string) (*textTemplate.Template, error) {
 	log.Debug("-- Loading template: ", path)
-	thisT, tErr := textTemplate.ParseFiles(path)
-
-	return thisT, tErr
+	return textTemplate.ParseFiles(path)
 }
 
 func (a *APIDefinitionLoader) loadBlobTemplate(blob string) (*textTemplate.Template, error) {
 	log.Debug("-- Loading blob")
-	uDec, decErr := b64.StdEncoding.DecodeString(blob)
-
-	if decErr != nil {
-		return nil, decErr
+	uDec, err := b64.StdEncoding.DecodeString(blob)
+	if err != nil {
+		return nil, err
 	}
-
-	thisT, tErr := textTemplate.New("blob").Parse(string(uDec))
-	return thisT, tErr
+	return textTemplate.New("blob").Parse(string(uDec))
 }
 
 func (a *APIDefinitionLoader) compileTransformPathSpec(paths []tykcommon.TemplateMeta, stat URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	log.Debug("Checking for transform paths...")
 	for _, stringSpec := range paths {
@@ -734,7 +570,7 @@ func (a *APIDefinitionLoader) compileTransformPathSpec(paths []tykcommon.Templat
 			newTransformSpec.Template, templErr = a.loadBlobTemplate(stringSpec.TemplateData.TemplateSource)
 		default:
 			log.Warning("[Transform Templates] No tempalte mode defined! Found: ", stringSpec.TemplateData.Mode)
-			templErr = errors.New("No valid template mode defined, must be either 'file' or 'blob'.")
+			templErr = errors.New("No valid template mode defined, must be either 'file' or 'blob'")
 		}
 
 		if stat == Transformed {
@@ -744,7 +580,7 @@ func (a *APIDefinitionLoader) compileTransformPathSpec(paths []tykcommon.Templat
 		}
 
 		if templErr == nil {
-			thisURLSpec = append(thisURLSpec, newSpec)
+			urlSpec = append(urlSpec, newSpec)
 			log.Debug("-- Loaded")
 		} else {
 			log.Error("Template load failure! Skipping transformation: ", templErr)
@@ -752,14 +588,14 @@ func (a *APIDefinitionLoader) compileTransformPathSpec(paths []tykcommon.Templat
 
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileInjectedHeaderSpec(paths []tykcommon.HeaderInjectionMeta, stat URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
@@ -771,34 +607,34 @@ func (a *APIDefinitionLoader) compileInjectedHeaderSpec(paths []tykcommon.Header
 			newSpec.InjectHeadersResponse = stringSpec
 		}
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileMethodTransformSpec(paths []tykcommon.MethodTransformMeta, stat URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
 		a.generateRegex(stringSpec.Path, &newSpec, stat)
 		newSpec.MethodTransform = stringSpec
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileTimeoutPathSpec(paths []tykcommon.HardTimeoutMeta, stat URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
@@ -806,17 +642,17 @@ func (a *APIDefinitionLoader) compileTimeoutPathSpec(paths []tykcommon.HardTimeo
 		// Extend with method actions
 		newSpec.HardTimeout = stringSpec
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileRequestSizePathSpec(paths []tykcommon.RequestSizeMeta, stat URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
@@ -824,17 +660,17 @@ func (a *APIDefinitionLoader) compileRequestSizePathSpec(paths []tykcommon.Reque
 		// Extend with method actions
 		newSpec.RequestSize = stringSpec
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileCircuitBreakerPathSpec(paths []tykcommon.CircuitBreakerMeta, stat URLStatus, apiSpec *APISpec) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
@@ -893,17 +729,17 @@ func (a *APIDefinitionLoader) compileCircuitBreakerPathSpec(paths []tykcommon.Ci
 			}
 		}(stringSpec.Path, apiSpec, newSpec.CircuitBreaker.CB)
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileURLRewritesPathSpec(paths []tykcommon.URLRewriteMeta, stat URLStatus) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
@@ -911,20 +747,20 @@ func (a *APIDefinitionLoader) compileURLRewritesPathSpec(paths []tykcommon.URLRe
 		// Extend with method actions
 		newSpec.URLRewrite = stringSpec
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileVirtualPathspathSpec(paths []tykcommon.VirtualMeta, stat URLStatus, apiSpec *APISpec) []URLSpec {
 
 	// transform an extended configuration URL into an array of URLSpecs
 	// This way we can iterate the whole array once, on match we break with status
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	if !config.EnableJSVM {
-		return thisURLSpec
+		return urlSpec
 	}
 
 	for _, stringSpec := range paths {
@@ -935,38 +771,38 @@ func (a *APIDefinitionLoader) compileVirtualPathspathSpec(paths []tykcommon.Virt
 
 		PreLoadVirtualMetaCode(&newSpec.VirtualPathSpec, apiSpec.JSVM)
 
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileTrackedEndpointPathspathSpec(paths []tykcommon.TrackEndpointMeta, stat URLStatus, apiSpec *APISpec) []URLSpec {
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
 		a.generateRegex(stringSpec.Path, &newSpec, stat)
 		// Extend with method actions
 		newSpec.TrackEndpoint = stringSpec
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) compileUnTrackedEndpointPathspathSpec(paths []tykcommon.TrackEndpointMeta, stat URLStatus, apiSpec *APISpec) []URLSpec {
-	thisURLSpec := []URLSpec{}
+	urlSpec := []URLSpec{}
 
 	for _, stringSpec := range paths {
 		newSpec := URLSpec{}
 		a.generateRegex(stringSpec.Path, &newSpec, stat)
 		// Extend with method actions
 		newSpec.DoNotTrackEndpoint = stringSpec
-		thisURLSpec = append(thisURLSpec, newSpec)
+		urlSpec = append(urlSpec, newSpec)
 	}
 
-	return thisURLSpec
+	return urlSpec
 }
 
 func (a *APIDefinitionLoader) getExtendedPathSpecs(apiVersionDef tykcommon.VersionInfo, apiSpec *APISpec) ([]URLSpec, bool) {
@@ -1197,49 +1033,39 @@ func (a *APISpec) CheckSpecMatchesStatus(url string, method interface{}, RxPaths
 }
 
 func (a *APISpec) getVersionFromRequest(r *http.Request) string {
-	if a.APIDefinition.VersionDefinition.Location == "header" {
+	switch a.APIDefinition.VersionDefinition.Location {
+	case "header":
 		versionHeaderVal := r.Header.Get(a.APIDefinition.VersionDefinition.Key)
 		if versionHeaderVal != "" {
 			return versionHeaderVal
 		}
-
 		return ""
 
-	} else if a.APIDefinition.VersionDefinition.Location == "url-param" {
+	case "url-param":
 		tempRes := CopyRequest(r)
 		fromParam := tempRes.FormValue(a.APIDefinition.VersionDefinition.Key)
 		if fromParam != "" {
 			return fromParam
 		}
-
 		return ""
 
-	} else if a.APIDefinition.VersionDefinition.Location == "url" {
-		thisURL := r.URL.Path
-		thisURL = strings.Replace(thisURL, a.Proxy.ListenPath, "", 1)
-
-		if len(thisURL) == 0 {
+	case "url":
+		url := strings.Replace(r.URL.Path, a.Proxy.ListenPath, "", 1)
+		if len(url) == 0 {
 			return ""
 		}
-
-		if thisURL[:1] == "/" {
-			thisURL = thisURL[1:]
+		if url[:1] == "/" {
+			url = url[1:]
 		}
 
 		// Assume first param is the version ID
-		firstParamEndsAt := strings.Index(thisURL, "/")
+		firstParamEndsAt := strings.Index(url, "/")
 		if firstParamEndsAt == -1 {
 			return ""
 		}
 
-		thisVersion := thisURL[:firstParamEndsAt]
-
-		return thisVersion
-
-	} else {
-		return ""
+		return url[:firstParamEndsAt]
 	}
-
 	return ""
 }
 
@@ -1262,15 +1088,9 @@ func (a *APISpec) IsThisAPIVersionExpired(versionDef *tykcommon.VersionInfo) boo
 		return true
 	}
 
-	remaining := time.Since(t)
-	if remaining < 0 {
-		// It's in the future, keep going
-		return false
-	}
-
 	// It's in the past, expire
-	return true
-
+	// It's in the future, keep going
+	return time.Since(t) >= 0
 }
 
 // IsRequestValid will check if an incoming request has valid version data and return a RequestStatus that
@@ -1284,7 +1104,7 @@ func (a *APISpec) IsRequestValid(r *http.Request) (bool, RequestStatus, interfac
 	}
 
 	// Is the API version expired?
-	if a.IsThisAPIVersionExpired(versionMetaData) == true {
+	if a.IsThisAPIVersionExpired(versionMetaData) {
 		// Expired - fail
 		return false, VersionExpired, nil
 	}
@@ -1316,7 +1136,7 @@ func (a *APISpec) IsRequestValid(r *http.Request) (bool, RequestStatus, interfac
 // GetVersionData attempts to extract the version data from a request, depending on where it is stored in the
 // request (currently only "header" is supported)
 func (a *APISpec) GetVersionData(r *http.Request) (*tykcommon.VersionInfo, *[]URLSpec, bool, RequestStatus) {
-	var thisVersion = tykcommon.VersionInfo{}
+	var version = tykcommon.VersionInfo{}
 	var versionKey string
 	var versionRxPaths = []URLSpec{}
 	var versionWLStatus bool
@@ -1325,7 +1145,7 @@ func (a *APISpec) GetVersionData(r *http.Request) (*tykcommon.VersionInfo, *[]UR
 	aVersion, foundInContext := context.GetOk(r, VersionData)
 
 	if foundInContext {
-		thisVersion = aVersion.(tykcommon.VersionInfo)
+		version = aVersion.(tykcommon.VersionInfo)
 		versionKey = context.Get(r, VersionKeyContext).(string)
 	} else {
 		// Are we versioned?
@@ -1333,26 +1153,26 @@ func (a *APISpec) GetVersionData(r *http.Request) (*tykcommon.VersionInfo, *[]UR
 			// Get the first one in the list
 			for k, v := range a.APIDefinition.VersionData.Versions {
 				versionKey = k
-				thisVersion = v
+				version = v
 				break
 			}
 		} else {
 			// Extract Version Info
 			versionKey = a.getVersionFromRequest(r)
 			if versionKey == "" {
-				return &thisVersion, &versionRxPaths, versionWLStatus, VersionNotFound
+				return &version, &versionRxPaths, versionWLStatus, VersionNotFound
 			}
 		}
 
 		// Load Version Data - General
 		var ok bool
-		thisVersion, ok = a.APIDefinition.VersionData.Versions[versionKey]
+		version, ok = a.APIDefinition.VersionData.Versions[versionKey]
 		if !ok {
-			return &thisVersion, &versionRxPaths, versionWLStatus, VersionDoesNotExist
+			return &version, &versionRxPaths, versionWLStatus, VersionDoesNotExist
 		}
 
 		// Lets save this for the future
-		context.Set(r, VersionData, thisVersion)
+		context.Set(r, VersionData, version)
 		context.Set(r, VersionKeyContext, versionKey)
 	}
 
@@ -1363,17 +1183,17 @@ func (a *APISpec) GetVersionData(r *http.Request) (*tykcommon.VersionInfo, *[]UR
 	if !rxOk {
 		log.Error("no RX Paths found for version")
 		log.Error(versionKey)
-		return &thisVersion, &versionRxPaths, versionWLStatus, VersionDoesNotExist
+		return &version, &versionRxPaths, versionWLStatus, VersionDoesNotExist
 	}
 
 	if !wlOk {
 		log.Error("No whitelist data found")
-		return &thisVersion, &versionRxPaths, versionWLStatus, VersionWhiteListStatusNotFound
+		return &version, &versionRxPaths, versionWLStatus, VersionWhiteListStatusNotFound
 	}
 
 	versionRxPaths = RxPaths
 	versionWLStatus = WhiteListStatus
 
-	return &thisVersion, &versionRxPaths, versionWLStatus, StatusOk
+	return &version, &versionRxPaths, versionWLStatus, StatusOk
 
 }

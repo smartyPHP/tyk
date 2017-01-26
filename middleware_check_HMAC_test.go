@@ -5,17 +5,18 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
-	"github.com/justinas/alice"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/justinas/alice"
 )
 
-var HMACAuthDef string = `
+var HMACAuthDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -26,7 +27,7 @@ var HMACAuthDef string = `
 			"key": "version"
 		},
 		"enable_signature_checking": true,
-        "hmac_allowed_clock_skew": 1000,
+		"hmac_allowed_clock_skew": 1000,
 		"auth": {
 			"auth_header_name": "authorization"
 		},
@@ -71,15 +72,15 @@ func createHMACAuthSession() SessionState {
 	return thisSession
 }
 
-func getHMACAuthChain(spec APISpec) http.Handler {
+func getHMACAuthChain(spec *APISpec) http.Handler {
 	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 	remote, _ := url.Parse("http://example.com/")
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
+	proxy := TykNewSingleHostReverseProxy(remote, spec)
+	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, spec))
+	tykMiddleware := &TykMiddleware{spec, proxy}
 	chain := alice.New(
 		CreateMiddleware(&IPWhiteListMiddleware{tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&HMACMiddleware{TykMiddleware: tykMiddleware}, tykMiddleware),
@@ -246,7 +247,6 @@ func TestHMACAuthSessionFailureDateExpired(t *testing.T) {
 	}
 
 	chain := getHMACAuthChain(spec)
-	time.Sleep(time.Second * 2)
 	chain.ServeHTTP(recorder, req)
 
 	if recorder.Code != 400 {
@@ -301,7 +301,6 @@ func TestHMACAuthSessionKeyMissing(t *testing.T) {
 	}
 
 	chain := getHMACAuthChain(spec)
-	time.Sleep(time.Second * 2)
 	chain.ServeHTTP(recorder, req)
 
 	if recorder.Code != 400 {
@@ -356,7 +355,6 @@ func TestHMACAuthSessionMalformedHeader(t *testing.T) {
 	}
 
 	chain := getHMACAuthChain(spec)
-	time.Sleep(time.Second * 2)
 	chain.ServeHTTP(recorder, req)
 
 	if recorder.Code != 400 {
@@ -424,7 +422,7 @@ func TestHMACAuthSessionPassWithHeaderField(t *testing.T) {
 }
 
 func getUpperCaseEscaped(signature string) (bool, []string) {
-	r, _:= regexp.Compile("%[A-F0-9][A-F0-9]")
+	r, _ := regexp.Compile("%[A-F0-9][A-F0-9]")
 	foundList := r.FindAllString(signature, -1)
 	if len(foundList) > 0 {
 		return true, foundList
@@ -436,7 +434,7 @@ func getUpperCaseEscaped(signature string) (bool, []string) {
 func replaceUpperCase(originalSignature string, lowercaseList []string) string {
 	log.Warning("ORIGINAL: ", originalSignature)
 	newSignature := originalSignature
-	for _, lStr := range(lowercaseList) {
+	for _, lStr := range lowercaseList {
 		asUpper := strings.ToLower(lStr)
 		newSignature = strings.Replace(newSignature, lStr, asUpper, -1)
 	}

@@ -1,12 +1,12 @@
 package main
 
-import "net/http"
-
 import (
 	"bytes"
 	"errors"
 	"io"
 	"io/ioutil"
+	"net/http"
+	"strings"
 
 	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/tykcommon"
@@ -32,10 +32,6 @@ func (k *AuthKey) GetConfig() (interface{}, error) {
 
 func (a *AuthKey) IsEnabledForSpec() bool {
 	return true
-}
-
-func (k *AuthKey) copyResponse(dst io.Writer, src io.Reader) {
-	io.Copy(dst, src)
 }
 
 func CopyRequest(r *http.Request) *http.Request {
@@ -76,14 +72,14 @@ func (k *AuthKey) setContextVars(r *http.Request, token string) {
 func (k *AuthKey) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
 	var tempRes *http.Request
 
-	thisConfig := k.TykMiddleware.Spec.APIDefinition.Auth
+	config := k.TykMiddleware.Spec.APIDefinition.Auth
 
-	key := r.Header.Get(thisConfig.AuthHeaderName)
+	key := r.Header.Get(config.AuthHeaderName)
 
-	paramName := thisConfig.ParamName
-	if thisConfig.UseParam || paramName != "" {
+	paramName := config.ParamName
+	if config.UseParam || paramName != "" {
 		if paramName == "" {
-			paramName = thisConfig.AuthHeaderName
+			paramName = config.AuthHeaderName
 		}
 
 		tempRes = CopyRequest(r)
@@ -95,10 +91,10 @@ func (k *AuthKey) ProcessRequest(w http.ResponseWriter, r *http.Request, configu
 		}
 	}
 
-	cookieName := thisConfig.CookieName
-	if thisConfig.UseCookie || cookieName != "" {
+	cookieName := config.CookieName
+	if config.UseCookie || cookieName != "" {
 		if cookieName == "" {
-			cookieName = thisConfig.AuthHeaderName
+			cookieName = config.AuthHeaderName
 		}
 		if tempRes == nil {
 			tempRes = CopyRequest(r)
@@ -129,7 +125,7 @@ func (k *AuthKey) ProcessRequest(w http.ResponseWriter, r *http.Request, configu
 	key = stripBearer(key)
 
 	// Check if API key valid
-	thisSessionState, keyExists := k.TykMiddleware.CheckSessionAndIdentityForValidKey(key)
+	sessionState, keyExists := k.TykMiddleware.CheckSessionAndIdentityForValidKey(key)
 	if !keyExists {
 		log.WithFields(logrus.Fields{
 			"path":   r.URL.Path,
@@ -147,13 +143,20 @@ func (k *AuthKey) ProcessRequest(w http.ResponseWriter, r *http.Request, configu
 	}
 
 	// Set session state on context, we will need it later
-	if (k.TykMiddleware.Spec.BaseIdentityProvidedBy == tykcommon.AuthToken) || (k.TykMiddleware.Spec.BaseIdentityProvidedBy == tykcommon.UnsetAuth) {
-		context.Set(r, SessionData, thisSessionState)
+	switch k.TykMiddleware.Spec.BaseIdentityProvidedBy {
+	case tykcommon.AuthToken, tykcommon.UnsetAuth:
+		context.Set(r, SessionData, sessionState)
 		context.Set(r, AuthHeaderValue, key)
 		k.setContextVars(r, key)
 	}
 
 	return nil, 200
+}
+
+func stripBearer(token string) string {
+	token = strings.Replace(token, "Bearer", "", 1)
+	token = strings.Replace(token, "bearer", "", 1)
+	return strings.TrimSpace(token)
 }
 
 func AuthFailed(m *TykMiddleware, r *http.Request, authHeaderValue string) {

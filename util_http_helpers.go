@@ -2,11 +2,12 @@ package main
 
 import (
 	"bytes"
-	"github.com/gorilla/context"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
+
+	"github.com/gorilla/context"
 )
 
 func GetIPFromRequest(r *http.Request) string {
@@ -89,14 +90,11 @@ func RecordDetail(r *http.Request) bool {
 
 	// We are, so get session data
 	ses, found := context.GetOk(r, OrgSessionContext)
-	var thisSessionState SessionState
 	if !found {
 		// no session found, use global config
 		return config.AnalyticsConfig.EnableDetailedRecording
 	}
 
 	// Session found
-	thisSessionState = ses.(SessionState)
-	return thisSessionState.EnableDetailedRecording
+	return ses.(SessionState).EnableDetailedRecording
 }
-

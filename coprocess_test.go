@@ -19,13 +19,13 @@ import (
 	"github.com/justinas/alice"
 )
 
-const (
-	baseMiddlewarePath = "middleware/python"
-)
+const baseMiddlewarePath = "middleware/python"
 
-var CoProcessName = "test"
-var MessageType = coprocess.ProtobufMessage
-var thisTestDispatcher, _ = NewCoProcessDispatcher()
+var (
+	CoProcessName         = "test"
+	MessageType           = coprocess.ProtobufMessage
+	thisTestDispatcher, _ = NewCoProcessDispatcher()
+)
 
 /* Dispatcher functions */
 
@@ -166,7 +166,7 @@ func MakeCoProcessSampleAPI(apiTestDef string) *APISpec {
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	thisSpec.Init(&redisStore, &redisStore, healthStore, orgStore)
-	return &thisSpec
+	return thisSpec
 }
 
 func BuildCoProcessChain(spec *APISpec, hookName string, hookType coprocess.HookType, driver tykcommon.MiddlewareDriver) http.Handler {
@@ -310,7 +310,7 @@ func TestCoProcessAuth(t *testing.T) {
 	}
 }
 
-var basicCoProcessDef string = `
+var basicCoProcessDef = `
 
 	{
 		"name": "Tyk Test API - IPCONF Fail",
@@ -350,15 +350,15 @@ var basicCoProcessDef string = `
 						]
 			}
 		},
-    "custom_middleware": {
-      "pre": [
-        {
-          "name": "MyPreMiddleware",
-          "require_session": false
-        }
-      ],
-      "driver": "python"
-    },
+		"custom_middleware": {
+			"pre": [
+			{
+				"name": "MyPreMiddleware",
+				"require_session": false
+			}
+			],
+			"driver": "python"
+		},
 		"proxy": {
 			"listen_path": "/v1",
 			"target_url": "http://httpbin.org",
@@ -367,7 +367,7 @@ var basicCoProcessDef string = `
 	}
 `
 
-var protectedCoProcessDef string = `
+var protectedCoProcessDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -409,12 +409,12 @@ var protectedCoProcessDef string = `
 						]
 			}
 		},
-    "custom_middleware": {
-      "auth_check": {
-        "name": "TestAuthCheck"
-      },
-      "driver": "python"
-    },
+		"custom_middleware": {
+			"auth_check": {
+				"name": "TestAuthCheck"
+			},
+			"driver": "python"
+		},
 		"proxy": {
 			"listen_path": "/v1",
 			"target_url": "http://httpbin.org",

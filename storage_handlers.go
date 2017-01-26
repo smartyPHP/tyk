@@ -2,13 +2,13 @@ package main
 
 import (
 	"encoding/hex"
-	"errors"
-	"github.com/garyburd/redigo/redis"
-	"github.com/spaolacci/murmur3"
-	"hash"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
+	"github.com/spaolacci/murmur3"
 )
 
 // KeyError is a standard error for when a key is not found in the storage engine
@@ -17,12 +17,6 @@ type KeyError struct{}
 func (e KeyError) Error() string {
 	return "Key not found"
 }
-
-type StorageHandlerName string
-
-const (
-	RedisHandler StorageHandlerName = "redis"
-)
 
 // StorageHandler is a standard interface to a storage backend,
 // used by AuthorisationManager to read and write key values to the backend
@@ -47,136 +41,6 @@ type StorageHandler interface {
 	AddToSet(string, string)
 	RemoveFromSet(string, string)
 	DeleteScanMatch(string) bool
-}
-
-// InMemoryStorageManager implements the StorageHandler interface,
-// it uses an in-memory map to store sessions, should only be used
-// for testing purposes
-type InMemoryStorageManager struct {
-	Sessions map[string]string
-}
-
-// Decrement is a dummy function
-func (s *InMemoryStorageManager) Decrement(n string) {
-	log.Warning("Not implemented!")
-}
-
-func (s *InMemoryStorageManager) SetRollingWindow(keyName string, per int64, val string) (int, []interface{}) {
-	log.Warning("Not Implemented!")
-	return 0, []interface{}{}
-}
-
-func (s *InMemoryStorageManager) SetRollingWindowPipeline(keyName string, per int64, val string) (int, []interface{}) {
-	log.Warning("Not Implemented!")
-	return 0, []interface{}{}
-}
-
-func (s *InMemoryStorageManager) IncrememntWithExpire(n string, i int64) int64 {
-	log.Warning("Not implemented!")
-	return 0
-}
-
-func (s *InMemoryStorageManager) Connect() bool {
-	return true
-}
-
-// GetKey retrieves the key from the in-memory map
-func (s InMemoryStorageManager) GetKey(keyName string) (string, error) {
-	value, ok := s.Sessions[keyName]
-	if !ok {
-		return "", KeyError{}
-	}
-
-	return value, nil
-
-}
-
-func (s InMemoryStorageManager) GetRawKey(keyName string) (string, error) {
-	value, ok := s.Sessions[keyName]
-	if !ok {
-		return "", KeyError{}
-	}
-
-	return value, nil
-
-}
-
-// SetKey updates the in-memory key
-func (s InMemoryStorageManager) SetKey(keyName string, sessionState string, timeout int64) error {
-	s.Sessions[keyName] = sessionState
-	return nil
-}
-
-func (s InMemoryStorageManager) SetRawKey(keyName string, sessionState string, timeout int64) error {
-	s.Sessions[keyName] = sessionState
-	return nil
-}
-
-func (s InMemoryStorageManager) GetExp(keyName string) (int64, error) {
-	return 0, nil
-}
-
-// GetKeys will retreive multiple keys based on a filter (prefix, e.g. tyk.keys)
-func (s InMemoryStorageManager) GetKeys(filter string) []string {
-	sessions := make([]string, 0, len(s.Sessions))
-	for key := range s.Sessions {
-		if strings.Contains(key, filter) {
-			sessions = append(sessions, key)
-		}
-	}
-
-	return sessions
-}
-
-// GetKeysAndValues returns all keys and their data, very expensive call.
-func (s InMemoryStorageManager) GetKeysAndValues() map[string]string {
-	return s.Sessions
-}
-
-// GetKeysAndValuesWithFilter does nothing here
-func (s InMemoryStorageManager) GetKeysAndValuesWithFilter(filter string) map[string]string {
-	log.Warning("NOT IMPLEMENTED")
-	return s.Sessions
-}
-
-// DeleteKey will remove a key from the storage engine
-func (s InMemoryStorageManager) DeleteKey(keyName string) bool {
-	delete(s.Sessions, keyName)
-	return true
-}
-
-// DeleteRawKey will remove a key from the storage engine
-func (s InMemoryStorageManager) DeleteRawKey(keyName string) bool {
-	delete(s.Sessions, keyName)
-	return true
-}
-
-// DeleteKeys remove keys from sessions DB
-func (s InMemoryStorageManager) DeleteKeys(keys []string) bool {
-
-	for _, keyName := range keys {
-		delete(s.Sessions, keyName)
-	}
-
-	return true
-}
-
-func (s InMemoryStorageManager) GetSet(keyName string) (map[string]string, error) {
-	log.Error("Not implemented")
-	return map[string]string{}, nil
-}
-
-func (s InMemoryStorageManager) AddToSet(keyName string, value string) {
-	log.Error("Not implemented")
-}
-
-func (s InMemoryStorageManager) RemoveFromSet(keyName string, value string) {
-	log.Error("Not implemented")
-}
-
-func (s InMemoryStorageManager) DeleteScanMatch(pattern string) bool {
-	log.Error("Not implemented")
-	return false
 }
 
 // ------------------- REDIS STORAGE MANAGER -------------------------------
@@ -255,7 +119,7 @@ func (r *RedisStorageManager) Connect() bool {
 }
 
 func doHash(in string) string {
-	var h hash.Hash32 = murmur3.New32()
+	h := murmur3.New32()
 	h.Write([]byte(in))
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -361,21 +225,19 @@ func (r *RedisStorageManager) SetKey(keyName string, sessionState string, timeou
 		log.Info("Connection dropped, connecting..")
 		r.Connect()
 		return r.SetKey(keyName, sessionState, timeout)
-	} else {
-		_, err := db.Do("SET", r.fixKey(keyName), sessionState)
-		if timeout > 0 {
-			_, expErr := db.Do("EXPIRE", r.fixKey(keyName), timeout)
-			if expErr != nil {
-				log.Error("Could not EXPIRE key: ", expErr)
-				return expErr
-			}
-		}
-		if err != nil {
-			log.Error("Error trying to set value: ", err)
-			return err
+	}
+	_, err := db.Do("SET", r.fixKey(keyName), sessionState)
+	if timeout > 0 {
+		_, expErr := db.Do("EXPIRE", r.fixKey(keyName), timeout)
+		if expErr != nil {
+			log.Error("Could not EXPIRE key: ", expErr)
+			return expErr
 		}
 	}
-
+	if err != nil {
+		log.Error("Error trying to set value: ", err)
+		return err
+	}
 	return nil
 }
 
@@ -387,21 +249,19 @@ func (r *RedisStorageManager) SetRawKey(keyName string, sessionState string, tim
 		log.Info("Connection dropped, connecting..")
 		r.Connect()
 		return r.SetRawKey(keyName, sessionState, timeout)
-	} else {
-		_, err := db.Do("SET", keyName, sessionState)
-		if timeout > 0 {
-			_, expErr := db.Do("EXPIRE", keyName, timeout)
-			if expErr != nil {
-				log.Error("Could not EXPIRE key: ", expErr)
-				return expErr
-			}
-		}
-		if err != nil {
-			log.Error("Error trying to set value: ", err)
-			return err
+	}
+	_, err := db.Do("SET", keyName, sessionState)
+	if timeout > 0 {
+		_, expErr := db.Do("EXPIRE", keyName, timeout)
+		if expErr != nil {
+			log.Error("Could not EXPIRE key: ", expErr)
+			return expErr
 		}
 	}
-
+	if err != nil {
+		log.Error("Error trying to set value: ", err)
+		return err
+	}
 	return nil
 }
 
@@ -416,12 +276,8 @@ func (r *RedisStorageManager) Decrement(keyName string) {
 		log.Info("Connection dropped, connecting..")
 		r.Connect()
 		r.Decrement(keyName)
-	} else {
-		err := db.Send("DECR", keyName)
-
-		if err != nil {
-			log.Error("Error trying to decrement value:", err)
-		}
+	} else if err := db.Send("DECR", keyName); err != nil {
+		log.Error("Error trying to decrement value:", err)
 	}
 }
 
@@ -502,12 +358,11 @@ func (r *RedisStorageManager) GetKeysAndValuesWithFilter(filter string) map[stri
 		valueObj, err := db.Do("MGET", sessionsInterface.([]interface{})...)
 		values, err := redis.Strings(valueObj, err)
 
-		returnValues := make(map[string]string)
+		m := make(map[string]string)
 		for i, v := range keys {
-			returnValues[r.cleanKey(v)] = values[i]
+			m[r.cleanKey(v)] = values[i]
 		}
-
-		return returnValues
+		return m
 	}
 
 	return map[string]string{}
@@ -534,12 +389,11 @@ func (r *RedisStorageManager) GetKeysAndValues() map[string]string {
 		valueObj, err := db.Do("MGET", sessionsInterface.([]interface{})...)
 		values, err := redis.Strings(valueObj, err)
 
-		returnValues := make(map[string]string)
+		m := make(map[string]string)
 		for i, v := range keys {
-			returnValues[r.cleanKey(v)] = values[i]
+			m[r.cleanKey(v)] = values[i]
 		}
-
-		return returnValues
+		return m
 	}
 
 	return map[string]string{}
@@ -645,7 +499,7 @@ func (r *RedisStorageManager) DeleteRawKeys(keys []string, prefix string) bool {
 
 // StartPubSubHandler will listen for a signal and run the callback with the message
 func (r *RedisStorageManager) StartPubSubHandler(channel string, callback func(redis.Message)) error {
-	psc := redis.PubSubConn{r.pool.Get()}
+	psc := redis.PubSubConn{Conn: r.pool.Get()}
 	psc.Subscribe(channel)
 	for {
 		switch v := psc.Receive().(type) {
@@ -657,11 +511,9 @@ func (r *RedisStorageManager) StartPubSubHandler(channel string, callback func(r
 
 		case error:
 			log.Error("Redis disconnected or error received, attempting to reconnect: ", v)
-
 			return v
 		}
 	}
-	return errors.New("Connection closed.")
 }
 
 func (r *RedisStorageManager) Publish(channel string, message string) error {
@@ -768,15 +620,16 @@ func (r *RedisStorageManager) SetRollingWindow(keyName string, per int64, expire
 		// REset the TTL so the key lives as long as the requests pile in
 		db.Send("EXPIRE", keyName, per)
 		r, err := redis.Values(db.Do("EXEC"))
-
-		intVal := len(r[1].([]interface{}))
-
-		log.Debug("Returned: ", intVal)
-
+		if err == nil && len(r) < 1 {
+			err = fmt.Errorf("expected 1 values, got %d", len(r))
+		}
 		if err != nil {
 			log.Error("Multi command failed: ", err)
+			return 0, []interface{}{}
 		}
 
+		intVal := len(r[1].([]interface{}))
+		log.Debug("Returned: ", intVal)
 		return intVal, r[1].([]interface{})
 	}
 	return 0, []interface{}{}

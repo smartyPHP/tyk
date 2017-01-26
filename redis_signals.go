@@ -3,14 +3,15 @@ package main
 import (
 	b64 "encoding/base64"
 	"encoding/json"
-	"github.com/TykTechnologies/logrus"
-	"github.com/TykTechnologies/goverify"
-	"github.com/garyburd/redigo/redis"
 	"time"
+
+	"github.com/TykTechnologies/goverify"
+	"github.com/TykTechnologies/logrus"
+	"github.com/garyburd/redigo/redis"
 )
 
 const (
-	RedisPubSubChannel string = "tyk.cluster.notifications"
+	RedisPubSubChannel = "tyk.cluster.notifications"
 )
 
 func StartPubSubLoop() {
@@ -38,9 +39,8 @@ func StartPubSubLoop() {
 }
 
 func HandleRedisMsg(message redis.Message) {
-	thisMessage := Notification{}
-	err := json.Unmarshal(message.Data, &thisMessage)
-	if err != nil {
+	notif := Notification{}
+	if err := json.Unmarshal(message.Data, &notif); err != nil {
 		log.Error("Unmarshalling message body failed, malformed: ", err)
 		return
 	}
@@ -51,32 +51,32 @@ func HandleRedisMsg(message redis.Message) {
 	}
 
 	// Don't react to all messages
-	_, ignore := ignoreMessageList[thisMessage.Command]
+	_, ignore := ignoreMessageList[notif.Command]
 	if ignore {
 		return
 	}
 
 	// Check for a signature, if not signature found, handle
-	if !IsPayloadSignatureValid(thisMessage) {
+	if !IsPayloadSignatureValid(notif) {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
 		}).Error("Payload signature is invalid!")
 		return
 	}
 
-	switch thisMessage.Command {
+	switch notif.Command {
 	case NoticeDashboardZeroConf:
-		HandleDashboardZeroConfMessage(thisMessage.Payload)
+		HandleDashboardZeroConfMessage(notif.Payload)
 		break
 	case NoticeConfigUpdate:
-		HandleNewConfiguration(thisMessage.Payload)
+		HandleNewConfiguration(notif.Payload)
 		break
 	case NoticeDashboardConfigRequest:
-		HandleSendMiniConfig(thisMessage.Payload)
+		HandleSendMiniConfig(notif.Payload)
 	case NoticeGatewayDRLNotification:
-		OnServerStatusReceivedHandler(thisMessage.Payload)
+		OnServerStatusReceivedHandler(notif.Payload)
 	case NoticeGatewayLENotification:
-		OnLESSLStatusReceivedHandler(thisMessage.Payload)
+		OnLESSLStatusReceivedHandler(notif.Payload)
 	default:
 		HandleReloadMsg()
 		break
@@ -84,34 +84,41 @@ func HandleRedisMsg(message redis.Message) {
 
 }
 
+func HandleReloadMsg() {
+	log.WithFields(logrus.Fields{
+		"prefix": "pub-sub",
+	}).Info("Reloading endpoints")
+	ReloadURLStructure()
+}
+
 var warnedOnce bool
 var notificationVerifier goverify.Verifier
 
 func IsPayloadSignatureValid(notification Notification) bool {
-	if (notification.Command == NoticeGatewayDRLNotification) || (notification.Command == NoticeGatewayLENotification) {
+	switch notification.Command {
+	case NoticeGatewayDRLNotification, NoticeGatewayLENotification:
 		// Gateway to gateway
 		return true
 	}
 
 	if notification.Signature == "" && config.AllowInsecureConfigs {
-		if warnedOnce == false {
+		if !warnedOnce {
 			log.WithFields(logrus.Fields{
 				"prefix": "pub-sub",
 			}).Warning("Insecure configuration detected (allowing)!")
 			warnedOnce = true
 		}
-
 		return true
 	}
 
 	if config.PublicKeyPath != "" {
 		if notificationVerifier == nil {
-			var loadErr error
-			notificationVerifier, loadErr = goverify.LoadPublicKeyFromFile(config.PublicKeyPath)
-			if loadErr != nil {
+			var err error
+			notificationVerifier, err = goverify.LoadPublicKeyFromFile(config.PublicKeyPath)
+			if err != nil {
 				log.WithFields(logrus.Fields{
 					"prefix": "pub-sub",
-				}).Error("Notification signer: Failed loading private key from path: ", loadErr)
+				}).Error("Notification signer: Failed loading private key from path: ", err)
 				return false
 			}
 		}
@@ -130,7 +137,7 @@ func IsPayloadSignatureValid(notification Notification) bool {
 			log.WithFields(logrus.Fields{
 				"prefix": "pub-sub",
 			}).Error("Could not verify notification: ", err, ": ", notification)
-			
+
 			return false
 		}
 

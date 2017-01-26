@@ -22,15 +22,12 @@ func (mw *MiddlewareContextVars) GetName() string {
 
 // GetConfig retrieves the configuration from the API config - we user mapstructure for this for simplicity
 func (m *MiddlewareContextVars) GetConfig() (interface{}, error) {
-	var thisModuleConfig MiddlewareContextVarsConfig
-	return thisModuleConfig, nil
+	var moduleConfig MiddlewareContextVarsConfig
+	return moduleConfig, nil
 }
 
 func (a *MiddlewareContextVars) IsEnabledForSpec() bool {
-	if a.Spec.EnableContextVars {
-		return true
-	}
-	return false
+	return a.Spec.EnableContextVars
 }
 
 // ProcessRequest will run any checks on the request on the way through the system, return an error to have the chain fail

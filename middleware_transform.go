@@ -27,8 +27,6 @@ func (mw *TransformMiddleware) GetName() string {
 	return "TransformMiddleware"
 }
 
-type TransformMiddlewareConfig struct{}
-
 // New lets you do any initialisations for the object can be done here
 func (m *TransformMiddleware) New() {}
 
@@ -39,8 +37,8 @@ func (t *TransformMiddleware) GetConfig() (interface{}, error) {
 
 func (t *TransformMiddleware) IsEnabledForSpec() bool {
 	var used bool
-	for _, thisVersion := range t.TykMiddleware.Spec.VersionData.Versions {
-		if len(thisVersion.ExtendedPaths.Transform) > 0 {
+	for _, version := range t.TykMiddleware.Spec.VersionData.Versions {
+		if len(version.ExtendedPaths.Transform) > 0 {
 			used = true
 			break
 		}
@@ -51,20 +49,10 @@ func (t *TransformMiddleware) IsEnabledForSpec() bool {
 
 // ProcessRequest will run any checks on the request on the way through the system, return an error to have the chain fail
 func (t *TransformMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
-
-	// New request checker, more targetted, less likely to fail
-	var stat RequestStatus
-	var meta interface{}
-	var found bool
-
 	_, versionPaths, _, _ := t.TykMiddleware.Spec.GetVersionData(r)
-	found, meta = t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, Transformed)
+	found, meta := t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, Transformed)
 	if found {
-		stat = StatusTransform
-	}
-
-	if stat == StatusTransform {
-		thisMeta := meta.(*TransformSpec)
+		tmeta := meta.(*TransformSpec)
 
 		// Read the body:
 		defer r.Body.Close()
@@ -72,18 +60,18 @@ func (t *TransformMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Requ
 
 		// Put into an interface:
 		var bodyData interface{}
-		switch thisMeta.TemplateMeta.TemplateData.Input {
+		switch tmeta.TemplateMeta.TemplateData.Input {
 		case tykcommon.RequestXML:
 			mxj.XmlCharsetReader = WrappedCharsetReader
-			var xErr error
-			bodyData, xErr = mxj.NewMapXml(body) // unmarshal
-			if xErr != nil {
+			var err error
+			bodyData, err = mxj.NewMapXml(body) // unmarshal
+			if err != nil {
 				log.WithFields(logrus.Fields{
 					"prefix":      "inbound-transform",
 					"server_name": t.Spec.APIDefinition.Proxy.TargetURL,
 					"api_id":      t.Spec.APIDefinition.APIID,
 					"path":        r.URL.Path,
-				}).Error("Error unmarshalling XML: ", xErr)
+				}).Error("Error unmarshalling XML: ", err)
 			}
 		case tykcommon.RequestJSON:
 			json.Unmarshal(body, &bodyData)
@@ -92,7 +80,7 @@ func (t *TransformMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Requ
 			bodyData = make(map[string]interface{})
 		}
 
-		if thisMeta.TemplateMeta.TemplateData.EnableSession {
+		if tmeta.TemplateMeta.TemplateData.EnableSession {
 			ses := context.Get(r, SessionData).(SessionState)
 			switch bodyData.(type) {
 			case map[string]interface{}:
@@ -110,8 +98,7 @@ func (t *TransformMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Requ
 
 		// Apply to template
 		var bodyBuffer bytes.Buffer
-		err = thisMeta.Template.Execute(&bodyBuffer, bodyData)
-		if err != nil {
+		if err = tmeta.Template.Execute(&bodyBuffer, bodyData); err != nil {
 			log.WithFields(logrus.Fields{
 				"prefix":      "inbound-transform",
 				"server_name": t.Spec.APIDefinition.Proxy.TargetURL,

@@ -2,9 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"time"
+
 	"github.com/TykTechnologies/logrus"
 	"github.com/garyburd/redigo/redis"
-	"time"
 )
 
 type InterfaceNotification struct {
@@ -20,7 +21,7 @@ type RedisNotificationHandler struct {
 }
 
 const (
-	UIChanName string = "dashboard.ui.messages"
+	UIChanName = "dashboard.ui.messages"
 )
 
 func (u *RedisNotificationHandler) Start() {

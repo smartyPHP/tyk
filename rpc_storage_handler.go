@@ -43,36 +43,32 @@ type GroupKeySpaceRequest struct {
 	GroupID string
 }
 
-// RPC_LoadCount is a counter to check if this is a cold boot
-var RPC_LoadCount int
-var RPC_EmergencyMode bool
-var RPC_EmergencyModeLoaded bool
+var (
+	// RPC_LoadCount is a counter to check if this is a cold boot
+	RPC_LoadCount           int
+	RPC_EmergencyMode       bool
+	RPC_EmergencyModeLoaded bool
 
-var ErrorDenied error = errors.New("Access Denied")
-
-var GlobalRPCCallTimeout time.Duration
-var GlobalRPCPingTimeout time.Duration
-
+	GlobalRPCCallTimeout time.Duration
+	GlobalRPCPingTimeout time.Duration
+)
 
 // ------------------- CLOUD STORAGE MANAGER -------------------------------
 
-var RPCCLientRWMutex sync.RWMutex = sync.RWMutex{}
+var RPCCLientRWMutex = sync.RWMutex{}
 var RPCClients = map[string]chan int{}
 
 func ClearRPCClients() {
-	return
-	log.Info("Found: ", len(RPCClients), " RPC connections, terminating")
-	for _, c := range RPCClients {
-
-		select {
-		case c <- 1:
-			log.Debug("Disconnect sent")
-		default:
-			log.Debug("Disconnect chan failed")
-		}
-
-		go func() { c <- 1 }()
-	}
+	// log.Info("Found: ", len(RPCClients), " RPC connections, terminating")
+	// for _, c := range RPCClients {
+	// 	select {
+	// 	case c <- 1:
+	// 		log.Debug("Disconnect sent")
+	// 	default:
+	// 		log.Debug("Disconnect chan failed")
+	// 	}
+	// 	go func(c chan int) { c <- 1 }(c)
+	// }
 }
 
 func RPCKeepAliveCheck(r *RPCStorageHandler) {
@@ -121,11 +117,6 @@ type RPCStorageHandler struct {
 	SuppressRegister bool
 }
 
-func handleReconnect(r *RPCStorageHandler) {
-	ClearRPCClients()
-
-}
-
 func (r *RPCStorageHandler) Register() {
 	r.ID = uuid.NewUUID().String()
 	myChan := make(chan int)
@@ -137,12 +128,10 @@ func (r *RPCStorageHandler) Register() {
 }
 
 func (r *RPCStorageHandler) checkDisconnect() {
-	select {
-	case res := <-r.killChan:
-		log.Info("RPC Client disconnecting: ", res)
-		r.Killed = true
-		r.Disconnect()
-	}
+	res := <-r.killChan
+	log.Info("RPC Client disconnecting: ", res)
+	r.Killed = true
+	r.Disconnect()
 }
 
 func (r *RPCStorageHandler) ReConnect() {
@@ -274,7 +263,7 @@ func (r *RPCStorageHandler) GroupLogin() {
 		return
 	}
 	log.Debug("[RPC Store] Group Login complete")
-	RPC_LoadCount += 1
+	RPC_LoadCount++
 }
 
 func (r *RPCStorageHandler) Login() {
@@ -303,7 +292,7 @@ func (r *RPCStorageHandler) Login() {
 		return
 	}
 	log.Debug("[RPC Store] Login complete")
-	RPC_LoadCount += 1
+	RPC_LoadCount++
 }
 
 // GetKey will retrieve a key from the database
@@ -536,11 +525,8 @@ func (r *RPCStorageHandler) DeleteKeys(keys []string) bool {
 		}
 
 		return ok.(bool)
-	} else {
-		log.Debug("RPCStorageHandler called DEL - Nothing to delete")
-		return true
 	}
-
+	log.Debug("RPCStorageHandler called DEL - Nothing to delete")
 	return true
 }
 
@@ -652,10 +638,7 @@ func (r RPCStorageHandler) RemoveFromSet(keyName string, value string) {
 
 func (r RPCStorageHandler) IsAccessError(err error) bool {
 	if err != nil {
-		if err.Error() == "Access Denied" {
-			return true
-		}
-		return false
+		return err.Error() == "Access Denied"
 	}
 	return false
 }
@@ -800,7 +783,7 @@ func (r *RPCStorageHandler) DeleteScanMatch(pattern string) bool {
 }
 
 func GetDispatcher() *gorpc.Dispatcher {
-	var Dispatch *gorpc.Dispatcher = gorpc.NewDispatcher()
+	Dispatch := gorpc.NewDispatcher()
 
 	Dispatch.AddFunc("Login", func(clientAddr string, userKey string) bool {
 		return false

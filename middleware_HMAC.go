@@ -17,9 +17,8 @@ import (
 	"github.com/gorilla/context"
 )
 
-const DateHeaderSpec string = "Date"
-const AltHeaderSpec string = "x-aux-date"
-const HMACClockSkewLimitInMs float64 = 1000
+const DateHeaderSpec = "Date"
+const AltHeaderSpec = "x-aux-date"
 
 // HMACMiddleware will check if the request has a signature, and if the request is allowed through
 type HMACMiddleware struct {
@@ -79,7 +78,7 @@ func (hm *HMACMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Get a session for the Key ID
-	thisSecret, thisSessionState, keyError := hm.getSecretAndSessionForKeyID(fieldValues.KeyID)
+	secret, sessionState, keyError := hm.getSecretAndSessionForKeyID(fieldValues.KeyID)
 	if keyError != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "hmac",
@@ -90,7 +89,7 @@ func (hm *HMACMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Create a signed string with the secret
-	encodedSignature := generateEncodedSignature(signatureString, thisSecret)
+	encodedSignature := generateEncodedSignature(signatureString, secret)
 
 	// Compare
 	matchPass := false
@@ -111,7 +110,7 @@ func (hm *HMACMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	if matchPass == false {
+	if !matchPass {
 		log.WithFields(logrus.Fields{
 			"prefix":   "hmac",
 			"expected": encodedSignature,
@@ -130,8 +129,9 @@ func (hm *HMACMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Set session state on context, we will need it later
-	if (hm.TykMiddleware.Spec.BaseIdentityProvidedBy == tykcommon.HMACKey) || (hm.TykMiddleware.Spec.BaseIdentityProvidedBy == tykcommon.UnsetAuth) {
-		context.Set(r, SessionData, thisSessionState)
+	switch hm.TykMiddleware.Spec.BaseIdentityProvidedBy {
+	case tykcommon.HMACKey, tykcommon.UnsetAuth:
+		context.Set(r, SessionData, sessionState)
 		context.Set(r, AuthHeaderValue, fieldValues.KeyID)
 		hm.setContextVars(r, fieldValues.KeyID)
 	}
@@ -139,6 +139,12 @@ func (hm *HMACMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request,
 	// Everything seems in order let the request through
 	return nil, 200
 
+}
+
+func stripSignature(token string) string {
+	token = strings.TrimPrefix(token, "Signature")
+	token = strings.TrimPrefix(token, "signature")
+	return strings.TrimSpace(token)
 }
 
 func (hm *HMACMiddleware) hasLowerCaseEscaped(signature string) (bool, []string) {
@@ -228,20 +234,20 @@ type HMACFieldValues struct {
 }
 
 func (hm *HMACMiddleware) getSecretAndSessionForKeyID(keyId string) (string, SessionState, error) {
-	thisSessionState, keyExists := hm.TykMiddleware.CheckSessionAndIdentityForValidKey(keyId)
+	sessionState, keyExists := hm.TykMiddleware.CheckSessionAndIdentityForValidKey(keyId)
 	if !keyExists {
-		return "", thisSessionState, errors.New("Key ID does not exist")
+		return "", sessionState, errors.New("Key ID does not exist")
 	}
 
-	if thisSessionState.HmacSecret == "" || thisSessionState.HMACEnabled == false {
+	if sessionState.HmacSecret == "" || !sessionState.HMACEnabled {
 		log.WithFields(logrus.Fields{
 			"prefix": "hmac",
 		}).Info("API Requires HMAC signature, session missing HMACSecret or HMAC not enabled for key")
 
-		return "", thisSessionState, errors.New("This key ID is invalid")
+		return "", sessionState, errors.New("This key ID is invalid")
 	}
 
-	return thisSessionState.HmacSecret, thisSessionState, nil
+	return sessionState.HmacSecret, sessionState, nil
 }
 
 func getDateHeader(r *http.Request) (string, string) {
@@ -269,7 +275,7 @@ func getDateHeader(r *http.Request) (string, string) {
 	return "", ""
 }
 
-var validKeyHeaders map[string]bool = map[string]bool{
+var validKeyHeaders = map[string]bool{
 	"keyid":     true,
 	"algorithm": true,
 	"headers":   true,
@@ -283,7 +289,7 @@ func isHeaderFieldKeyValid(key string) bool {
 
 func getFieldValues(authHeader string) (*HMACFieldValues, error) {
 	AsElements := strings.Split(authHeader, ",")
-	thisSet := HMACFieldValues{}
+	set := HMACFieldValues{}
 
 	for _, element := range AsElements {
 		kv := strings.Split(element, "=")
@@ -309,22 +315,22 @@ func getFieldValues(authHeader string) (*HMACFieldValues, error) {
 
 		switch key {
 		case "keyid":
-			thisSet.KeyID = value
+			set.KeyID = value
 		case "algorithm":
-			thisSet.Algorthm = value
+			set.Algorthm = value
 		case "headers":
-			thisSet.Headers = strings.Split(value, " ")
+			set.Headers = strings.Split(value, " ")
 		case "signature":
-			thisSet.Signature = value
+			set.Signature = value
 		}
 	}
 
 	// Date is the absolute minimum header set
-	if len(thisSet.Headers) == 0 {
-		thisSet.Headers = append(thisSet.Headers, "date")
+	if len(set.Headers) == 0 {
+		set.Headers = append(set.Headers, "date")
 	}
 
-	return &thisSet, nil
+	return &set, nil
 }
 
 // "Signature keyId="9876",algorithm="hmac-sha1",headers="x-test x-test-2",signature="queryEscape(base64(sig))"")
@@ -346,7 +352,7 @@ func generateHMACSignatureStringFromRequest(r *http.Request, fieldValues *HMACFi
 			signatureString += headerField
 		}
 
-		if i != (len(fieldValues.Headers) - 1) {
+		if i != len(fieldValues.Headers)-1 {
 			signatureString += "\n"
 		}
 	}
@@ -362,17 +368,4 @@ func generateEncodedSignature(signatureString string, secret string) string {
 	encodedString := base64.StdEncoding.EncodeToString(h.Sum(nil))
 	encodedString = url.QueryEscape(encodedString)
 	return encodedString
-}
-
-func generateAuthHeaderValue(fieldValues *HMACFieldValues) string {
-	authHeaderString := "Signature "
-	authHeaderString += "keyId=" + fieldValues.KeyID + ","
-	authHeaderString += "algorithm=" + fieldValues.Algorthm + ","
-	if len(fieldValues.Headers) > 0 {
-		headers := strings.Join(fieldValues.Headers, " ")
-		authHeaderString += "headers=" + headers
-	}
-	authHeaderString += ", signature=" + fieldValues.Signature
-
-	return authHeaderString
 }

@@ -3,12 +3,13 @@ package main
 import (
 	"crypto/tls"
 	"errors"
-	"github.com/TykTechnologies/logrus"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/TykTechnologies/logrus"
 )
 
 func canonicalAddr(url *url.URL) string {
@@ -21,7 +22,7 @@ func canonicalAddr(url *url.URL) string {
 }
 
 type WSDialer struct {
-	TykTransporter
+	*TykTransporter
 	RW        http.ResponseWriter
 	TLSConfig *tls.Config
 }
@@ -41,7 +42,8 @@ func (ws *WSDialer) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// We do not get this WSS scheme, need another way to identify it
-	if req.URL.Scheme == "wss" || req.URL.Scheme == "https" {
+	switch req.URL.Scheme {
+	case "wss", "https":
 		var tlsConfig *tls.Config
 		if ws.TLSClientConfig == nil {
 			tlsConfig = &tls.Config{}
@@ -75,7 +77,7 @@ func (ws *WSDialer) RoundTrip(req *http.Request) (*http.Response, error) {
 		log.WithFields(logrus.Fields{
 			"path":   req.URL.Path,
 			"origin": GetIPFromRequest(req),
-		}).Error("Hijack error: %v", err)
+		}).Errorf("Hijack error: %v", err)
 		return nil, err
 	}
 	defer nc.Close()
@@ -85,7 +87,7 @@ func (ws *WSDialer) RoundTrip(req *http.Request) (*http.Response, error) {
 		log.WithFields(logrus.Fields{
 			"path":   req.URL.Path,
 			"origin": GetIPFromRequest(req),
-		}).Error("Error copying request to target: %v", err)
+		}).Errorf("Error copying request to target: %v", err)
 		return nil, err
 	}
 
@@ -113,8 +115,5 @@ func IsWebsocket(req *http.Request) bool {
 	}
 
 	upgrade := strings.ToLower(strings.TrimSpace(req.Header.Get("Upgrade")))
-	if upgrade != "websocket" {
-		return false
-	}
-	return true
+	return upgrade == "websocket"
 }

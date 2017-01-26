@@ -11,14 +11,12 @@ import (
 	"github.com/gocraft/health"
 )
 
-var applicationGCStats debug.GCStats = debug.GCStats{}
+var applicationGCStats = debug.GCStats{}
 var instrument = health.NewStream()
 
 // SetupInstrumentation handles all the intialisation of the instrumentation handler
 func SetupInstrumentation(enabled bool) {
-	thisInstr := os.Getenv("TYK_INSTRUMENTATION")
-
-	if thisInstr == "1" {
+	if os.Getenv("TYK_INSTRUMENTATION") == "1" {
 		enabled = true
 	}
 
@@ -47,7 +45,7 @@ func SetupInstrumentation(enabled bool) {
 }
 
 // InstrumentationMW will set basic instrumentation events, variables and timers on API jobs
-func InstrumentationMW(handler func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, *http.Request) {
+func InstrumentationMW(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		job := instrument.NewJob("SystemAPICall")
 

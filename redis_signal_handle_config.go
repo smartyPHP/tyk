@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/TykTechnologies/logrus"
 	"io/ioutil"
+	"syscall"
 	"time"
+
+	"github.com/TykTechnologies/logrus"
 )
 
 type ConfigPayload struct {
@@ -35,7 +37,7 @@ func WriteNewConfiguration(payload ConfigPayload) error {
 	}
 
 	value, _ := argumentsBackup["--conf"]
-	var filename string = "./tyk.conf"
+	filename := "./tyk.conf"
 	if value != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
@@ -53,7 +55,7 @@ func WriteNewConfiguration(payload ConfigPayload) error {
 
 func GetExistingRawConfig() Config {
 	value, _ := argumentsBackup["--conf"]
-	var filename string = "./tyk.conf"
+	filename := "./tyk.conf"
 	if value != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
@@ -73,13 +75,13 @@ func GetExistingRawConfig() Config {
 
 func HandleNewConfiguration(payload string) {
 	// Decode the configuration from the payload
-	thisConfigPayload := ConfigPayload{}
+	configPayload := ConfigPayload{}
 
 	// We actually want to merge into the existing configuration
 	// so as not to lose data through automatic defaults
-	thisConfigPayload.Configuration = GetExistingRawConfig()
+	configPayload.Configuration = GetExistingRawConfig()
 
-	err := json.Unmarshal([]byte(payload), &thisConfigPayload)
+	err := json.Unmarshal([]byte(payload), &configPayload)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
@@ -88,14 +90,14 @@ func HandleNewConfiguration(payload string) {
 	}
 
 	// Make sure payload matches nodeID and hostname
-	if (thisConfigPayload.ForHostname != HostDetails.Hostname) && (thisConfigPayload.ForNodeID != NodeID) {
+	if configPayload.ForHostname != HostDetails.Hostname && configPayload.ForNodeID != NodeID {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
 		}).Info("Configuration update received, no NodeID/Hostname match found")
 		return
 	}
 
-	if !config.AllowRemoteConfig == false {
+	if config.AllowRemoteConfig {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
 		}).Warning("Ignoring new config: Remote configuration is not allowed for this node.")
@@ -110,7 +112,7 @@ func HandleNewConfiguration(payload string) {
 		return
 	}
 
-	writeErr := WriteNewConfiguration(thisConfigPayload)
+	writeErr := WriteNewConfiguration(configPayload)
 	if writeErr != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
@@ -123,4 +125,19 @@ func HandleNewConfiguration(payload string) {
 	}).Info("Initiating configuration reload")
 
 	ReloadConfiguration()
+}
+
+func ReloadConfiguration() {
+	myPID := HostDetails.PID
+	if myPID == 0 {
+		log.Error("No PID found, cannot reload")
+		return
+	}
+
+	log.Info("Sending reload signal to PID: ", myPID)
+
+	callErr := syscall.Kill(myPID, syscall.SIGUSR2)
+	if callErr != nil {
+		log.Error("Process reload failed: ", callErr)
+	}
 }

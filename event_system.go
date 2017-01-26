@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
+
 	"github.com/TykTechnologies/tykcommon"
 	"github.com/rubyist/circuitbreaker"
 	"gopkg.in/mgo.v2/bson"
-	"net/http"
-	"time"
 )
 
 // The name for event handlers as defined in the API Definition JSON/BSON format
@@ -136,45 +137,45 @@ func EncodeRequestToEvent(r *http.Request) string {
 // GetEventHandlerByName is a convenience function to get event handler instances from an API Definition
 func GetEventHandlerByName(handlerConf tykcommon.EventHandlerTriggerConfig, Spec *APISpec) (TykEventHandler, error) {
 
-	var thisConf interface{}
+	var conf interface{}
 	switch handlerConf.HandlerMeta.(type) {
 	case bson.M:
 		asByte, ok := json.Marshal(handlerConf.HandlerMeta)
 		if ok != nil {
 			log.Error("Failed to unmarshal handler meta! ", ok)
 		}
-		mErr := json.Unmarshal(asByte, &thisConf)
+		mErr := json.Unmarshal(asByte, &conf)
 		if mErr != nil {
 			log.Error("Return conversion failed, ", mErr)
 		}
 	default:
-		thisConf = handlerConf.HandlerMeta
+		conf = handlerConf.HandlerMeta
 	}
 
 	switch handlerConf.Handler {
 	case EH_LogHandler:
-		return LogMessageEventHandler{}.New(thisConf)
+		return LogMessageEventHandler{}.New(conf)
 	case EH_WebHook:
-		return WebHookHandler{}.New(thisConf)
+		return WebHookHandler{}.New(conf)
 	case EH_JSVMHandler:
 		// Load the globals and file here
 		if Spec != nil {
-			thisJSVMEventHandler, jsvmErr := JSVMEventHandler{Spec: Spec}.New(thisConf)
-			if jsvmErr == nil {
-				GlobalEventsJSVM.LoadJSPaths([]string{thisConf.(map[string]interface{})["path"].(string)}, "")
+			jsVmEventHandler, err := JSVMEventHandler{Spec: Spec}.New(conf)
+			if err == nil {
+				GlobalEventsJSVM.LoadJSPaths([]string{conf.(map[string]interface{})["path"].(string)}, "")
 			}
-			return thisJSVMEventHandler, jsvmErr
+			return jsVmEventHandler, err
 		}
 	case EH_CoProcessHandler:
 		if Spec != nil {
-			var thisCoProcessEventHandler TykEventHandler
+			var coprocessEventHandler TykEventHandler
 			var err error
 			if GlobalDispatcher == nil {
-				err = errors.New("No CP available!")
+				err = errors.New("no CP available")
 			} else {
-				thisCoProcessEventHandler, err = CoProcessEventHandler{Spec: Spec}.New(thisConf)
+				coprocessEventHandler, err = CoProcessEventHandler{Spec: Spec}.New(conf)
 			}
-			return thisCoProcessEventHandler, err
+			return coprocessEventHandler, err
 		}
 
 	}
@@ -202,7 +203,7 @@ func (t TykMiddleware) FireEvent(eventName tykcommon.TykEvent, eventMetaData int
 	}
 }
 
-func (s APISpec) FireEvent(eventName tykcommon.TykEvent, eventMetaData interface{}) {
+func (s *APISpec) FireEvent(eventName tykcommon.TykEvent, eventMetaData interface{}) {
 
 	log.Debug("EVENT FIRED: ", eventName)
 	handlers, handlerExists := s.EventPaths[eventName]
@@ -228,10 +229,9 @@ type LogMessageEventHandler struct {
 
 // New enables the intitialisation of event handler instances when they are created on ApiSpec creation
 func (l LogMessageEventHandler) New(handlerConf interface{}) (TykEventHandler, error) {
-	thisHandler := LogMessageEventHandler{}
-	thisHandler.conf = handlerConf.(map[string]interface{})
-
-	return thisHandler, nil
+	handler := LogMessageEventHandler{}
+	handler.conf = handlerConf.(map[string]interface{})
+	return handler, nil
 }
 
 // HandleEvent will be fired when the event handler instance is found in an APISpec EventPaths object during a request chain
@@ -259,13 +259,13 @@ func InitGenericEventHandlers(theseEvents tykcommon.EventHandlerMetaConfig) map[
 		log.Debug("FOUND EVENTS TO INIT")
 		for _, handlerConf := range eventHandlerConfs {
 			log.Debug("CREATING EVENT HANDLERS")
-			thisEventHandlerInstance, getHandlerErr := GetEventHandlerByName(handlerConf, nil)
+			eventHandlerInstance, err := GetEventHandlerByName(handlerConf, nil)
 
-			if getHandlerErr != nil {
-				log.Error("Failed to init event handler: ", getHandlerErr)
+			if err != nil {
+				log.Error("Failed to init event handler: ", err)
 			} else {
 				log.Debug("Init Event Handler: ", eventName)
-				actualEventHandlers[eventName] = append(actualEventHandlers[eventName], thisEventHandlerInstance)
+				actualEventHandlers[eventName] = append(actualEventHandlers[eventName], eventHandlerInstance)
 			}
 
 		}

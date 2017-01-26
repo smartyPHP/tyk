@@ -13,7 +13,7 @@ import (
 	"github.com/justinas/alice"
 )
 
-var basicAuthDef string = `
+var basicAuthDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -67,15 +67,15 @@ func createBasicAuthSession() SessionState {
 	return thisSession
 }
 
-func getBasicAuthChain(spec APISpec) http.Handler {
+func getBasicAuthChain(spec *APISpec) http.Handler {
 	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 	remote, _ := url.Parse("http://example.com/")
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
+	proxy := TykNewSingleHostReverseProxy(remote, spec)
+	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, spec))
+	tykMiddleware := &TykMiddleware{spec, proxy}
 	chain := alice.New(
 		CreateMiddleware(&IPWhiteListMiddleware{tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&BasicAuthKeyIsValid{tykMiddleware}, tykMiddleware),

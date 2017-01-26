@@ -76,31 +76,29 @@ func (w WebHookHandler) createConfigObject(handlerConf interface{}) (WebHookHand
 
 // New enables the init of event handler instances when they are created on ApiSpec creation
 func (w WebHookHandler) New(handlerConf interface{}) (TykEventHandler, error) {
-	thisHandler := WebHookHandler{}
-	var confErr error
-	thisHandler.conf, confErr = w.createConfigObject(handlerConf)
-
-	if confErr != nil {
+	handler := WebHookHandler{}
+	var err error
+	handler.conf, err = w.createConfigObject(handlerConf)
+	if err != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "webhooks",
-		}).Error("Problem getting configuration, skipping. ", confErr)
-		return thisHandler, confErr
+		}).Error("Problem getting configuration, skipping. ", err)
+		return handler, err
 	}
 
 	// Get a storage reference
-	thisHandler.store = GetRedisInterfacePointer()
+	handler.store = GetRedisInterfacePointer()
 
 	// Pre-load template on init
 	var webHookTemplate *template.Template
-	var tErr error
 	var templateLoaded bool
-	if thisHandler.conf.TemplatePath != "" {
-		webHookTemplate, tErr = template.ParseFiles(thisHandler.conf.TemplatePath)
-		if tErr != nil {
+	if handler.conf.TemplatePath != "" {
+		webHookTemplate, err = template.ParseFiles(handler.conf.TemplatePath)
+		if err != nil {
 			log.WithFields(logrus.Fields{
 				"prefix": "webhooks",
-				"target": thisHandler.conf.TargetPath,
-			}).Warning("Custom template load failure, using default: ", tErr)
+				"target": handler.conf.TargetPath,
+			}).Warning("Custom template load failure, using default: ", err)
 			defaultPath := path.Join(config.TemplatePath, "default_webhook.json")
 			webHookTemplate, _ = template.ParseFiles(defaultPath)
 			templateLoaded = true
@@ -109,33 +107,32 @@ func (w WebHookHandler) New(handlerConf interface{}) (TykEventHandler, error) {
 		}
 	}
 
-	if thisHandler.conf.TemplatePath == "" && templateLoaded == false {
+	if handler.conf.TemplatePath == "" && templateLoaded {
 		log.WithFields(logrus.Fields{
 			"prefix": "webhooks",
-			"target": thisHandler.conf.TargetPath,
+			"target": handler.conf.TargetPath,
 		}).Info("Loading default template.")
 		defaultPath := path.Join(config.TemplatePath, "default_webhook.json")
 		webHookTemplate, _ = template.ParseFiles(defaultPath)
 	}
 
-	thisHandler.template = webHookTemplate
+	handler.template = webHookTemplate
 	log.WithFields(logrus.Fields{
 		"prefix": "webhooks",
-	}).Debug("Timeout set to: ", thisHandler.conf.EventTimeout)
+	}).Debug("Timeout set to: ", handler.conf.EventTimeout)
 
-	if !thisHandler.checkURL(thisHandler.conf.TargetPath) {
+	if !handler.checkURL(handler.conf.TargetPath) {
 		log.WithFields(logrus.Fields{
 			"prefix": "webhooks",
 		}).Error("Init failed for this webhook, invalid URL, URL must be absolute")
 	}
 
-	return thisHandler, nil
+	return handler, nil
 }
 
 // hookFired checks if an event has been fired within the EventTimeout setting
 func (w WebHookHandler) WasHookFired(checksum string) bool {
-	_, keyErr := w.store.GetKey(checksum)
-	if keyErr != nil {
+	if _, err := w.store.GetKey(checksum); err != nil {
 		// Key not found, so hook is in limit
 		log.WithFields(logrus.Fields{
 			"prefix": "webhooks",
@@ -165,7 +162,7 @@ func (w WebHookHandler) getRequestMethod(m string) WebHookRequestMethod {
 	case "DELETE":
 		return WH_DELETE
 	case "PATCH":
-		return WH_DELETE
+		return WH_PATCH
 	default:
 		log.WithFields(logrus.Fields{
 			"prefix": "webhooks",

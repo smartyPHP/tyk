@@ -15,10 +15,8 @@ type TransformHeaders struct {
 	*TykMiddleware
 }
 
-const TYK_META_LABEL string = "$tyk_meta."
-const TYK_CONTEXT_LABEL string = "$tyk_context."
-
-type TransformHeadersConfig struct{}
+const TYK_META_LABEL = "$tyk_meta."
+const TYK_CONTEXT_LABEL = "$tyk_context."
 
 func (mw *TransformHeaders) GetName() string {
 	return "TransformHeaders"
@@ -34,16 +32,16 @@ func (t *TransformHeaders) GetConfig() (interface{}, error) {
 
 func (t *TransformHeaders) IsEnabledForSpec() bool {
 	var used bool
-	for _, thisVersion := range t.TykMiddleware.Spec.VersionData.Versions {
-		if len(thisVersion.ExtendedPaths.TransformHeader) > 0 {
+	for _, version := range t.TykMiddleware.Spec.VersionData.Versions {
+		if len(version.ExtendedPaths.TransformHeader) > 0 {
 			used = true
 			break
 		}
-		if len(thisVersion.GlobalHeaders) > 0 {
+		if len(version.GlobalHeaders) > 0 {
 			used = true
 			break
 		}
-		if len(thisVersion.GlobalHeadersRemove) > 0 {
+		if len(version.GlobalHeadersRemove) > 0 {
 			used = true
 			break
 		}
@@ -58,11 +56,11 @@ func (t *TransformHeaders) iterateAddHeaders(kv map[string]string, r *http.Reque
 	// Get session data
 	ses, found := context.GetOk(r, SessionData)
 	cnt, contextFound := context.GetOk(r, ContextData)
-	var thisSessionState SessionState
+	var sessionState SessionState
 	var contextData map[string]interface{}
 
 	if found {
-		thisSessionState = ses.(SessionState)
+		sessionState = ses.(SessionState)
 	}
 
 	if contextFound {
@@ -75,8 +73,8 @@ func (t *TransformHeaders) iterateAddHeaders(kv map[string]string, r *http.Reque
 			// Using meta_data key
 			if found {
 				metaKey := strings.Replace(nVal, TYK_META_LABEL, "", 1)
-				if thisSessionState.MetaData != nil {
-					tempVal, ok := thisSessionState.MetaData.(map[string]interface{})[metaKey]
+				if sessionState.MetaData != nil {
+					tempVal, ok := sessionState.MetaData.(map[string]interface{})[metaKey]
 					if ok {
 						nVal = tempVal.(string)
 						r.Header.Add(nKey, nVal)
@@ -136,12 +134,6 @@ func (t *TransformHeaders) iterateAddHeaders(kv map[string]string, r *http.Reque
 
 // ProcessRequest will run any checks on the request on the way through the system, return an error to have the chain fail
 func (t *TransformHeaders) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
-
-	// Uee the request status validator to see if it's in our cache list
-	var stat RequestStatus
-	var meta interface{}
-	var found bool
-
 	vInfo, versionPaths, _, _ := t.TykMiddleware.Spec.GetVersionData(r)
 
 	// Manage global headers first - remove
@@ -157,20 +149,13 @@ func (t *TransformHeaders) ProcessRequest(w http.ResponseWriter, r *http.Request
 		t.iterateAddHeaders(vInfo.GlobalHeaders, r)
 	}
 
-	found, meta = t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, HeaderInjected)
+	found, meta := t.TykMiddleware.Spec.CheckSpecMatchesStatus(r.URL.Path, r.Method, versionPaths, HeaderInjected)
 	if found {
-		stat = StatusHeaderInjected
-	}
-
-	if stat == StatusHeaderInjected {
-		thisMeta := meta.(*tykcommon.HeaderInjectionMeta)
-
-		for _, dKey := range thisMeta.DeleteHeaders {
+		hmeta := meta.(*tykcommon.HeaderInjectionMeta)
+		for _, dKey := range hmeta.DeleteHeaders {
 			r.Header.Del(dKey)
 		}
-
-		t.iterateAddHeaders(thisMeta.AddHeaders, r)
-
+		t.iterateAddHeaders(hmeta.AddHeaders, r)
 	}
 
 	return nil, 200

@@ -61,7 +61,7 @@ func GetSpecForApi(APIID string) *APISpec {
 		return nil
 	}
 
-	spec, ok := (*ApiSpecRegister)[APIID]
+	spec, ok := ApiSpecRegister[APIID]
 	if !ok {
 		return nil
 	}
@@ -71,7 +71,7 @@ func GetSpecForApi(APIID string) *APISpec {
 
 func GetSpecForOrg(APIID string) *APISpec {
 	var aKey string
-	for k, v := range *ApiSpecRegister {
+	for k, v := range ApiSpecRegister {
 		if v.OrgID == APIID {
 			return v
 		}
@@ -79,21 +79,21 @@ func GetSpecForOrg(APIID string) *APISpec {
 	}
 
 	// If we can't find a spec, it doesn;t matter, because we default to Redis anyway, grab whatever you can find
-	return (*ApiSpecRegister)[aKey]
+	return ApiSpecRegister[aKey]
 }
 
 func checkAndApplyTrialPeriod(keyName string, apiId string, newSession *SessionState) {
 	// Check the policy to see if we are forcing an expiry on the key
 	if newSession.ApplyPolicyID != "" {
-		thisPolicy, foundPolicy := Policies[newSession.ApplyPolicyID]
-		if foundPolicy {
+		policy, ok := Policies[newSession.ApplyPolicyID]
+		if ok {
 			// Are we foring an expiry?
-			if thisPolicy.KeyExpiresIn > 0 {
+			if policy.KeyExpiresIn > 0 {
 				// We are, does the key exist?
 				_, found := GetKeyDetail(keyName, apiId)
 				if !found {
 					// this is a new key, lets expire it
-					newSession.Expires = time.Now().Unix() + thisPolicy.KeyExpiresIn
+					newSession.Expires = time.Now().Unix() + policy.KeyExpiresIn
 				}
 
 			}
@@ -106,21 +106,21 @@ func doAddOrUpdate(keyName string, newSession SessionState, dontReset bool) erro
 
 	if len(newSession.AccessRights) > 0 {
 		// We have a specific list of access rules, only add / update those
-		for apiId, _ := range newSession.AccessRights {
-			thisAPISpec := GetSpecForApi(apiId)
-			if thisAPISpec != nil {
+		for apiId := range newSession.AccessRights {
+			apiSpec := GetSpecForApi(apiId)
+			if apiSpec != nil {
 
 				checkAndApplyTrialPeriod(keyName, apiId, &newSession)
 
 				// Lets reset keys if they are edited by admin
-				if !thisAPISpec.DontSetQuotasOnCreate {
+				if !apiSpec.DontSetQuotasOnCreate {
 					// Reset quote by default
 					if !dontReset {
-						thisAPISpec.SessionManager.ResetQuota(keyName, newSession)
+						apiSpec.SessionManager.ResetQuota(keyName, newSession)
 						newSession.QuotaRenews = time.Now().Unix() + newSession.QuotaRenewalRate
 					}
 
-					err := thisAPISpec.SessionManager.UpdateSession(keyName, newSession, GetLifetime(thisAPISpec, &newSession))
+					err := apiSpec.SessionManager.UpdateSession(keyName, newSession, GetLifetime(apiSpec, &newSession))
 					if err != nil {
 						return err
 					}
@@ -143,7 +143,7 @@ func doAddOrUpdate(keyName string, newSession SessionState, dontReset bool) erro
 		// nothing defined, add key to ALL
 		if config.AllowMasterKeys {
 			log.Warning("No API Access Rights set, adding key to ALL.")
-			for _, spec := range *ApiSpecRegister {
+			for _, spec := range ApiSpecRegister {
 				if !dontReset {
 					spec.SessionManager.ResetQuota(keyName, newSession)
 					newSession.QuotaRenews = time.Now().Unix() + newSession.QuotaRenewalRate
@@ -176,7 +176,7 @@ func doAddOrUpdate(keyName string, newSession SessionState, dontReset bool) erro
 }
 
 func ObfuscateKeyString(keyName string) string {
-	var obfuscated string = "--"
+	obfuscated := "--"
 
 	if len(keyName) > 4 {
 		obfuscated = "****" + keyName[len(keyName)-4:]
@@ -204,17 +204,17 @@ func SetSessionPassword(session *SessionState) {
 
 func GetKeyDetail(key string, APIID string) (SessionState, bool) {
 
-	thisSessionManager := FallbackKeySesionManager
+	sessionManager := FallbackKeySesionManager
 	if APIID != "" {
-		thisSpec := GetSpecForApi(APIID)
-		if thisSpec == nil {
+		spec := GetSpecForApi(APIID)
+		if spec == nil {
 			log.Error("No API Spec found for this keyspace")
 			return SessionState{}, false
 		}
-		thisSessionManager = thisSpec.SessionManager
+		sessionManager = spec.SessionManager
 	}
 
-	return thisSessionManager.GetSessionDetail(key)
+	return sessionManager.GetSessionDetail(key)
 }
 
 func handleAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
@@ -222,10 +222,9 @@ func handleAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
 	decoder := json.NewDecoder(r.Body)
 	var responseMessage []byte
 	var newSession SessionState
-	err := decoder.Decode(&newSession)
 	code := 200
 
-	if err != nil {
+	if err := decoder.Decode(&newSession); err != nil {
 		log.Error("Couldn't decode new session object: ", err)
 		code = 400
 		success = false
@@ -246,7 +245,7 @@ func handleAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
 				// Ge the session
 				var originalKey SessionState
 				var found bool
-				for api_id, _ := range newSession.AccessRights {
+				for api_id := range newSession.AccessRights {
 					originalKey, found = GetKeyDetail(keyName, api_id)
 					if found {
 						break
@@ -267,7 +266,7 @@ func handleAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
 
 		}
 		dont_reset := r.FormValue("suppress_reset")
-		var suppress_reset bool = false
+		suppress_reset := false
 
 		if dont_reset == "1" {
 			suppress_reset = true
@@ -279,22 +278,21 @@ func handleAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
 		}
 	}
 
-	var action string
-	var event tykcommon.TykEvent
+	action := "modified"
+	event := EVENT_TokenUpdated
 	if r.Method == "POST" {
 		action = "added"
 		event = EVENT_TokenCreated
-	} else {
-		action = "modified"
-		event = EVENT_TokenUpdated
 	}
 
 	if success {
 		response := APIModifyKeySuccess{
 			keyName,
 			"ok",
-			action}
+			action,
+		}
 
+		var err error
 		responseMessage, err = json.Marshal(&response)
 
 		if err != nil {
@@ -322,7 +320,7 @@ func handleGetDetail(sessionKey string, APIID string) ([]byte, int) {
 	var err error
 	code := 200
 
-	thisSessionManager := FallbackKeySesionManager
+	sessionManager := FallbackKeySesionManager
 	if APIID != "" {
 		thiSpec := GetSpecForApi(APIID)
 		if thiSpec == nil {
@@ -330,14 +328,14 @@ func handleGetDetail(sessionKey string, APIID string) ([]byte, int) {
 			responseMessage, _ = json.Marshal(&notFound)
 			return responseMessage, 400
 		}
-		thisSessionManager = thiSpec.SessionManager
+		sessionManager = thiSpec.SessionManager
 	}
 
-	thisSession, ok := thisSessionManager.GetSessionDetail(sessionKey)
+	session, ok := sessionManager.GetSessionDetail(sessionKey)
 	if !ok {
 		success = false
 	} else {
-		responseMessage, err = json.Marshal(&thisSession)
+		responseMessage, err = json.Marshal(&session)
 		if err != nil {
 			log.Error("Marshalling failed: ", err)
 			success = false
@@ -386,7 +384,7 @@ func handleGetAllKeys(filter string, APIID string) ([]byte, int) {
 		return errJSON, 400
 	}
 
-	thisSessionManager := FallbackKeySesionManager
+	sessionManager := FallbackKeySesionManager
 	if APIID != "" {
 		thiSpec := GetSpecForApi(APIID)
 		if thiSpec == nil {
@@ -394,10 +392,10 @@ func handleGetAllKeys(filter string, APIID string) ([]byte, int) {
 			responseMessage, _ = json.Marshal(&notFound)
 			return responseMessage, 400
 		}
-		thisSessionManager = thiSpec.SessionManager
+		sessionManager = thiSpec.SessionManager
 	}
 
-	sessions := thisSessionManager.GetSessions(filter)
+	sessions := sessionManager.GetSessions(filter)
 
 	fixed_sessions := make([]string, 0)
 	for _, s := range sessions {
@@ -447,7 +445,7 @@ func handleDeleteKey(keyName string, APIID string) ([]byte, int) {
 
 	if APIID == "-1" {
 		// Go through ALL managed API's and delete the key
-		for _, spec := range *ApiSpecRegister {
+		for _, spec := range ApiSpecRegister {
 			spec.SessionManager.RemoveSession(keyName)
 			spec.SessionManager.ResetQuota(keyName, SessionState{})
 		}
@@ -462,7 +460,7 @@ func handleDeleteKey(keyName string, APIID string) ([]byte, int) {
 	}
 
 	OrgID := ""
-	thisSessionManager := FallbackKeySesionManager
+	sessionManager := FallbackKeySesionManager
 	if APIID != "" {
 		thiSpec := GetSpecForApi(APIID)
 		if thiSpec == nil {
@@ -471,11 +469,11 @@ func handleDeleteKey(keyName string, APIID string) ([]byte, int) {
 			return responseMessage, 400
 		}
 		OrgID = thiSpec.OrgID
-		thisSessionManager = thiSpec.SessionManager
+		sessionManager = thiSpec.SessionManager
 	}
 
-	thisSessionManager.RemoveSession(keyName)
-	thisSessionManager.ResetQuota(keyName, SessionState{})
+	sessionManager.RemoveSession(keyName)
+	sessionManager.ResetQuota(keyName, SessionState{})
 	code := 200
 
 	statusObj := APIModifyKeySuccess{keyName, "ok", "deleted"}
@@ -515,7 +513,7 @@ func handleDeleteHashedKey(keyName string, APIID string) ([]byte, int) {
 
 	if APIID == "-1" {
 		// Go through ALL managed API's and delete the key
-		for _, spec := range *ApiSpecRegister {
+		for _, spec := range ApiSpecRegister {
 			spec.SessionManager.RemoveSession(keyName)
 		}
 
@@ -528,7 +526,7 @@ func handleDeleteHashedKey(keyName string, APIID string) ([]byte, int) {
 		return responseMessage, 200
 	}
 
-	thisSessionManager := FallbackKeySesionManager
+	sessionManager := FallbackKeySesionManager
 	if APIID != "" {
 		thiSpec := GetSpecForApi(APIID)
 		if thiSpec == nil {
@@ -536,11 +534,11 @@ func handleDeleteHashedKey(keyName string, APIID string) ([]byte, int) {
 			responseMessage, _ = json.Marshal(&notFound)
 			return responseMessage, 400
 		}
-		thisSessionManager = thiSpec.SessionManager
+		sessionManager = thiSpec.SessionManager
 	}
 
 	// This is so we bypass the hash function
-	sessStore := thisSessionManager.GetStore()
+	sessStore := sessionManager.GetStore()
 
 	// TODO: This is pretty ugly
 	setKeyName := "apikey-" + keyName
@@ -617,17 +615,16 @@ func HandleGetAPIList() ([]byte, int) {
 	var responseMessage []byte
 	var err error
 
-	var thisAPIIDList []tykcommon.APIDefinition
-	thisAPIIDList = make([]tykcommon.APIDefinition, len(*ApiSpecRegister))
+	apiIDList := make([]*tykcommon.APIDefinition, len(ApiSpecRegister))
 
 	c := 0
-	for _, apiSpec := range *ApiSpecRegister {
-		thisAPIIDList[c] = apiSpec.APIDefinition
-		thisAPIIDList[c].RawData = nil
+	for _, apiSpec := range ApiSpecRegister {
+		apiIDList[c] = apiSpec.APIDefinition
+		apiIDList[c].RawData = nil
 		c++
 	}
 
-	responseMessage, err = json.Marshal(&thisAPIIDList)
+	responseMessage, err = json.Marshal(&apiIDList)
 
 	if err != nil {
 		log.Error("Marshalling failed: ", err)
@@ -641,7 +638,7 @@ func HandleGetAPI(APIID string) ([]byte, int) {
 	var responseMessage []byte
 	var err error
 
-	for _, apiSpec := range *ApiSpecRegister {
+	for _, apiSpec := range ApiSpecRegister {
 		if apiSpec.APIDefinition.APIID == APIID {
 
 			responseMessage, err = json.Marshal(apiSpec.APIDefinition)
@@ -674,11 +671,10 @@ func HandleAddOrUpdateApi(APIID string, r *http.Request) ([]byte, int) {
 	success := true
 	decoder := json.NewDecoder(r.Body)
 	var responseMessage []byte
-	var newDef tykcommon.APIDefinition
-	err := decoder.Decode(&newDef)
+	newDef := &tykcommon.APIDefinition{}
 	code := 200
 
-	if err != nil {
+	if err := decoder.Decode(newDef); err != nil {
 		log.Error("Couldn't decode new API Definition object: ", err)
 		success = false
 		return createError("Request malformed"), 400
@@ -728,6 +724,7 @@ func HandleAddOrUpdateApi(APIID string, r *http.Request) ([]byte, int) {
 			"ok",
 			action}
 
+		var err error
 		responseMessage, err = json.Marshal(&response)
 
 		if err != nil {
@@ -777,12 +774,18 @@ func HandleDeleteAPI(APIID string) ([]byte, int) {
 }
 
 func apiHandler(w http.ResponseWriter, r *http.Request) {
-	APIID := r.URL.Path[len("/tyk/apis/"):]
+	var APIID string
+
+	if r.URL.Path != "/tyk/apis" {
+		APIID = r.URL.Path[len("/tyk/apis/"):]
+	}
+
 	var responseMessage []byte
 	var code int
 
 	log.Debug(r.Method)
-	if r.Method == "GET" {
+	switch r.Method {
+	case "GET":
 		if APIID != "" {
 			log.Debug("Requesting API definition for", APIID)
 			responseMessage, code = HandleGetAPI(APIID)
@@ -790,14 +793,13 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 			log.Debug("Requesting API list")
 			responseMessage, code = HandleGetAPIList()
 		}
-
-	} else if r.Method == "POST" {
+	case "POST":
 		log.Debug("Creating new definition file")
 		responseMessage, code = HandleAddOrUpdateApi(APIID, r)
-	} else if r.Method == "PUT" {
+	case "PUT":
 		log.Debug("Updating existing API: ", APIID)
 		responseMessage, code = HandleAddOrUpdateApi(APIID, r)
-	} else if r.Method == "DELETE" {
+	case "DELETE":
 		log.Debug("Deleting existing API: ", APIID)
 		if APIID != "" {
 			log.Debug("Deleting API definition for: ", APIID)
@@ -806,7 +808,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 			code = 400
 			responseMessage = createError("Must specify an APIID to delete")
 		}
-	} else {
+	default:
 		// Return Not supported message (and code)
 		code = 405
 		responseMessage = createError("Method not supported")
@@ -822,10 +824,11 @@ func keyHandler(w http.ResponseWriter, r *http.Request) {
 	var responseMessage []byte
 	var code int
 
-	if r.Method == "POST" || r.Method == "PUT" {
+	switch r.Method {
+	case "POST", "PUT":
 		responseMessage, code = handleAddOrUpdate(keyName, r)
 
-	} else if r.Method == "GET" {
+	case "GET":
 		if keyName != "" {
 			// Return single key detail
 			responseMessage, code = handleGetDetail(keyName, APIID)
@@ -834,7 +837,7 @@ func keyHandler(w http.ResponseWriter, r *http.Request) {
 			responseMessage, code = handleGetAllKeys(filter, APIID)
 		}
 
-	} else if r.Method == "DELETE" {
+	case "DELETE":
 		hashed := r.FormValue("hashed")
 		// Remove a key
 		if hashed == "" {
@@ -843,7 +846,7 @@ func keyHandler(w http.ResponseWriter, r *http.Request) {
 			responseMessage, code = handleDeleteHashedKey(keyName, APIID)
 		}
 
-	} else {
+	default:
 		// Return Not supported message (and code)
 		code = 405
 		responseMessage = createError("Method not supported")
@@ -866,9 +869,7 @@ func policyUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		decoder := json.NewDecoder(r.Body)
 		var policRecord PolicyUpdateObj
-		err := decoder.Decode(&policRecord)
-
-		if err != nil {
+		if err := decoder.Decode(&policRecord); err != nil {
 			decodeFail := APIStatusMessage{"error", "Couldn't decode instruction"}
 			responseMessage, _ = json.Marshal(&decodeFail)
 			DoJSONWrite(w, 400, responseMessage)
@@ -890,7 +891,7 @@ func handleUpdateHashedKey(keyName string, APIID string, policyId string) ([]byt
 	var responseMessage []byte
 	var err error
 
-	thisSessionManager := FallbackKeySesionManager
+	sessionManager := FallbackKeySesionManager
 	if APIID != "" {
 		thiSpec := GetSpecForApi(APIID)
 		if thiSpec == nil {
@@ -898,11 +899,11 @@ func handleUpdateHashedKey(keyName string, APIID string, policyId string) ([]byt
 			responseMessage, _ = json.Marshal(&notFound)
 			return responseMessage, 400
 		}
-		thisSessionManager = thiSpec.SessionManager
+		sessionManager = thiSpec.SessionManager
 	}
 
 	// This is so we bypass the hash function
-	sessStore := thisSessionManager.GetStore()
+	sessStore := sessionManager.GetStore()
 
 	// TODO: This is pretty ugly
 	setKeyName := "apikey-" + keyName
@@ -993,10 +994,11 @@ func orgHandler(w http.ResponseWriter, r *http.Request) {
 	var responseMessage []byte
 	var code int
 
-	if r.Method == "POST" || r.Method == "PUT" {
+	switch r.Method {
+	case "POST", "PUT":
 		responseMessage, code = handleOrgAddOrUpdate(keyName, r)
 
-	} else if r.Method == "GET" {
+	case "GET":
 
 		if keyName != "" {
 			// Return single org detail
@@ -1006,11 +1008,11 @@ func orgHandler(w http.ResponseWriter, r *http.Request) {
 			responseMessage, code = handleGetAllOrgKeys(filter, "")
 		}
 
-	} else if r.Method == "DELETE" {
+	case "DELETE":
 		// Remove a key
 		responseMessage, code = handleDeleteOrgKey(keyName)
 
-	} else {
+	default:
 		// Return Not supported message (and code)
 		code = 405
 		responseMessage = createError("Method not supported")
@@ -1020,39 +1022,36 @@ func orgHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleOrgAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
-	success := true
+	success := false
 	decoder := json.NewDecoder(r.Body)
 	var responseMessage []byte
 	var newSession SessionState
-	err := decoder.Decode(&newSession)
 	code := 200
 
-	if err != nil {
+	if err := decoder.Decode(&newSession); err != nil {
 		log.Error("Couldn't decode new session object: ", err)
 		code = 400
-		success = false
 		responseMessage = createError("Request malformed")
 	} else {
 		// Update our session object (create it)
 
 		spec := GetSpecForOrg(keyName)
-		var thisSessionManager SessionHandler
+		var sessionManager SessionHandler
 
 		if spec == nil {
 			log.Warning("Couldn't find org session store in active API list")
 			if config.SupressDefaultOrgStore {
 				responseMessage = createError("No such organisation found in Active API list")
 				return responseMessage, 400
-			} else {
-				thisSessionManager = &DefaultOrgStore
 			}
+			sessionManager = &DefaultOrgStore
 		} else {
-			thisSessionManager = spec.OrgSessionManager
+			sessionManager = spec.OrgSessionManager
 		}
 
 		do_reset := r.FormValue("reset_quota")
 		if do_reset == "1" {
-			thisSessionManager.ResetQuota(keyName, newSession)
+			sessionManager.ResetQuota(keyName, newSession)
 			newSession.QuotaRenews = time.Now().Unix() + newSession.QuotaRenewalRate
 			rawKey := QuotaKeyPrefix + publicHash(keyName)
 
@@ -1060,7 +1059,7 @@ func handleOrgAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
 			DefaultQuotaStore.RemoveSession(rawKey)
 		}
 
-		err := thisSessionManager.UpdateSession(keyName, newSession, 0)
+		err := sessionManager.UpdateSession(keyName, newSession, 0)
 		if err != nil {
 			responseMessage = createError("Error writing to key store " + err.Error())
 			return responseMessage, 400
@@ -1085,8 +1084,10 @@ func handleOrgAddOrUpdate(keyName string, r *http.Request) ([]byte, int) {
 		response := APIModifyKeySuccess{
 			keyName,
 			"ok",
-			action}
+			action,
+		}
 
+		var err error
 		responseMessage, err = json.Marshal(&response)
 
 		if err != nil {
@@ -1112,11 +1113,11 @@ func handleGetOrgDetail(ORGID string) ([]byte, int) {
 		return responseMessage, 400
 	}
 
-	thisSession, ok := thiSpec.OrgSessionManager.GetSessionDetail(ORGID)
+	session, ok := thiSpec.OrgSessionManager.GetSessionDetail(ORGID)
 	if !ok {
 		success = false
 	} else {
-		responseMessage, err = json.Marshal(&thisSession)
+		responseMessage, err = json.Marshal(&session)
 		if err != nil {
 			log.Error("Marshalling failed: ", err)
 			success = false
@@ -1290,23 +1291,15 @@ func expandKey(orgID, key string) string {
 	return fmt.Sprintf("%s%s", orgID, key)
 }
 
-func extractKey(orgID, key string) string {
-	replacementStr := fmt.Sprintf("%s", orgID)
-	replaced := strings.Replace(key, replacementStr, "", 1)
-	return replaced
-}
-
 func createKeyHandler(w http.ResponseWriter, r *http.Request) {
 	var responseMessage []byte
 	code := 200
-	var responseObj = APIModifyKeySuccess{}
+	responseObj := APIModifyKeySuccess{}
 
 	if r.Method == "POST" {
 		decoder := json.NewDecoder(r.Body)
 		var newSession SessionState
-		err := decoder.Decode(&newSession)
-
-		if err != nil {
+		if err := decoder.Decode(&newSession); err != nil {
 			responseMessage = []byte(E_SYSTEM_ERROR)
 			code = 500
 
@@ -1326,17 +1319,17 @@ func createKeyHandler(w http.ResponseWriter, r *http.Request) {
 			newSession.LastUpdated = strconv.Itoa(int(time.Now().Unix()))
 
 			if len(newSession.AccessRights) > 0 {
-				for apiId, _ := range newSession.AccessRights {
-					thisAPISpec := GetSpecForApi(apiId)
-					if thisAPISpec != nil {
+				for apiId := range newSession.AccessRights {
+					apiSpec := GetSpecForApi(apiId)
+					if apiSpec != nil {
 						checkAndApplyTrialPeriod(newKey, apiId, &newSession)
 						// If we have enabled HMAC checking for keys, we need to generate a secret for the client to use
-						if !thisAPISpec.DontSetQuotasOnCreate {
+						if !apiSpec.DontSetQuotasOnCreate {
 							// Reset quota by default
-							thisAPISpec.SessionManager.ResetQuota(newKey, newSession)
+							apiSpec.SessionManager.ResetQuota(newKey, newSession)
 							newSession.QuotaRenews = time.Now().Unix() + newSession.QuotaRenewalRate
 						}
-						err := thisAPISpec.SessionManager.UpdateSession(newKey, newSession, GetLifetime(thisAPISpec, &newSession))
+						err := apiSpec.SessionManager.UpdateSession(newKey, newSession, GetLifetime(apiSpec, &newSession))
 						if err != nil {
 							responseMessage = createError("Failed to create key - " + err.Error())
 							DoJSONWrite(w, 403, responseMessage)
@@ -1344,10 +1337,10 @@ func createKeyHandler(w http.ResponseWriter, r *http.Request) {
 						}
 					} else {
 						// Use fallback
-						thisSessionManager := FallbackKeySesionManager
+						sessionManager := FallbackKeySesionManager
 						newSession.QuotaRenews = time.Now().Unix() + newSession.QuotaRenewalRate
-						thisSessionManager.ResetQuota(newKey, newSession)
-						err := thisSessionManager.UpdateSession(newKey, newSession, -1)
+						sessionManager.ResetQuota(newKey, newSession)
+						err := sessionManager.UpdateSession(newKey, newSession, -1)
 						if err != nil {
 							responseMessage = createError("Failed to create key - " + err.Error())
 							DoJSONWrite(w, 403, responseMessage)
@@ -1369,7 +1362,7 @@ func createKeyHandler(w http.ResponseWriter, r *http.Request) {
 						"server_name": "system",
 					}).Warning("No API Access Rights set on key session, adding key to all APIs.")
 
-					for _, spec := range *ApiSpecRegister {
+					for _, spec := range ApiSpecRegister {
 						checkAndApplyTrialPeriod(newKey, spec.APIID, &newSession)
 						if !spec.DontSetQuotasOnCreate {
 							// Reset quote by default
@@ -1485,9 +1478,7 @@ func createOauthClient(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		decoder := json.NewDecoder(r.Body)
 		var newOauthClient NewClientRequest
-		err := decoder.Decode(&newOauthClient)
-
-		if err != nil {
+		if err := decoder.Decode(&newOauthClient); err != nil {
 			responseMessage = []byte(E_SYSTEM_ERROR)
 			code = 500
 
@@ -1526,8 +1517,8 @@ func createOauthClient(w http.ResponseWriter, r *http.Request) {
 			"prefix": "api",
 		}).Debug("Created storage ID: ", storageID)
 
-		thisAPISpec := GetSpecForApi(newOauthClient.APIID)
-		if thisAPISpec == nil {
+		apiSpec := GetSpecForApi(newOauthClient.APIID)
+		if apiSpec == nil {
 			log.WithFields(logrus.Fields{
 				"prefix": "api",
 				"apiID":  newOauthClient.APIID,
@@ -1536,7 +1527,7 @@ func createOauthClient(w http.ResponseWriter, r *http.Request) {
 			}).Error("Failed to create OAuth client")
 		}
 
-		storeErr := thisAPISpec.OAuthManager.OsinServer.Storage.SetClient(storageID, &newClient, true)
+		storeErr := apiSpec.OAuthManager.OsinServer.Storage.SetClient(storageID, &newClient, true)
 
 		if storeErr != nil {
 			log.WithFields(logrus.Fields{
@@ -1555,6 +1546,7 @@ func createOauthClient(w http.ResponseWriter, r *http.Request) {
 			PolicyID:          newClient.GetPolicyID(),
 		}
 
+		var err error
 		responseMessage, err = json.Marshal(&reportableClientData)
 
 		if err != nil {
@@ -1588,14 +1580,14 @@ func invalidateOauthRefresh(w http.ResponseWriter, r *http.Request) {
 			DoJSONWrite(w, 400, createError("Missing parameter api_id"))
 			return
 		}
-		thisAPISpec := GetSpecForApi(APIID)
+		apiSpec := GetSpecForApi(APIID)
 
 		log.WithFields(logrus.Fields{
 			"prefix": "api",
 			"apiID":  APIID,
 		}).Debug("Looking for refresh token in API Register")
 
-		if thisAPISpec == nil {
+		if apiSpec == nil {
 			log.WithFields(logrus.Fields{
 				"prefix": "api",
 				"apiID":  APIID,
@@ -1607,7 +1599,7 @@ func invalidateOauthRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if thisAPISpec.OAuthManager == nil {
+		if apiSpec.OAuthManager == nil {
 			log.WithFields(logrus.Fields{
 				"prefix": "api",
 				"apiID":  APIID,
@@ -1619,7 +1611,7 @@ func invalidateOauthRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		storeErr := thisAPISpec.OAuthManager.OsinServer.Storage.RemoveRefresh(keyCombined)
+		storeErr := apiSpec.OAuthManager.OsinServer.Storage.RemoveRefresh(keyCombined)
 
 		if storeErr != nil {
 			log.WithFields(logrus.Fields{
@@ -1685,7 +1677,8 @@ func oAuthClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == "GET" {
+	switch r.Method {
+	case "GET":
 		if keyName != "" {
 			// Return single client detail
 			responseMessage, code = getOauthClientDetails(keyName, apiID)
@@ -1693,12 +1686,10 @@ func oAuthClientHandler(w http.ResponseWriter, r *http.Request) {
 			// Return list of keys
 			responseMessage, code = getOauthClients(apiID)
 		}
-
-	} else if r.Method == "DELETE" {
+	case "DELETE":
 		// Remove a key
 		responseMessage, code = handleDeleteOAuthClient(keyName, apiID)
-
-	} else {
+	default:
 		// Return Not supported message (and code)
 		code = 405
 		responseMessage = createError("Method not supported")
@@ -1715,8 +1706,8 @@ func getOauthClientDetails(keyName string, APIID string) ([]byte, int) {
 	code := 200
 
 	storageID := createOauthClientStorageID(APIID, keyName)
-	thisAPISpec := GetSpecForApi(APIID)
-	if thisAPISpec == nil {
+	apiSpec := GetSpecForApi(APIID)
+	if apiSpec == nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "api",
 			"apiID":  APIID,
@@ -1730,15 +1721,15 @@ func getOauthClientDetails(keyName string, APIID string) ([]byte, int) {
 		return responseMessage, code
 	}
 
-	thisClientData, getClientErr := thisAPISpec.OAuthManager.OsinServer.Storage.GetClientNoPrefix(storageID)
-	if getClientErr != nil {
+	clientData, err := apiSpec.OAuthManager.OsinServer.Storage.GetClientNoPrefix(storageID)
+	if err != nil {
 		success = false
 	} else {
 		reportableClientData := NewClientRequest{
-			ClientID:          thisClientData.GetId(),
-			ClientSecret:      thisClientData.GetSecret(),
-			ClientRedirectURI: thisClientData.GetRedirectUri(),
-			PolicyID:          thisClientData.GetPolicyID(),
+			ClientID:          clientData.GetId(),
+			ClientSecret:      clientData.GetSecret(),
+			ClientRedirectURI: clientData.GetRedirectUri(),
+			PolicyID:          clientData.GetPolicyID(),
 		}
 		responseMessage, err = json.Marshal(&reportableClientData)
 		if err != nil {
@@ -1772,12 +1763,11 @@ func getOauthClientDetails(keyName string, APIID string) ([]byte, int) {
 // Delete Client
 func handleDeleteOAuthClient(keyName string, APIID string) ([]byte, int) {
 	var responseMessage []byte
-	var err error
 
 	storageID := createOauthClientStorageID(APIID, keyName)
 
-	thisAPISpec := GetSpecForApi(APIID)
-	if thisAPISpec == nil {
+	apiSpec := GetSpecForApi(APIID)
+	if apiSpec == nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "api",
 			"apiID":  APIID,
@@ -1792,15 +1782,15 @@ func handleDeleteOAuthClient(keyName string, APIID string) ([]byte, int) {
 		return responseMessage, 400
 	}
 
-	osinErr := thisAPISpec.OAuthManager.OsinServer.Storage.DeleteClient(storageID, true)
+	err := apiSpec.OAuthManager.OsinServer.Storage.DeleteClient(storageID, true)
 
 	code := 200
 	statusObj := APIModifyKeySuccess{keyName, "ok", "deleted"}
 
-	if osinErr != nil {
+	if err != nil {
 		code = 500
 		errObj := APIErrorMessage{"error", "Delete failed"}
-		responseMessage, err = json.Marshal(&errObj)
+		responseMessage, _ = json.Marshal(&errObj)
 		return responseMessage, code
 	}
 
@@ -1837,8 +1827,8 @@ func getOauthClients(APIID string) ([]byte, int) {
 	// filterID := OAUTH_PREFIX + APIID + "." + CLIENT_PREFIX
 	filterID := CLIENT_PREFIX
 
-	thisAPISpec := GetSpecForApi(APIID)
-	if thisAPISpec == nil {
+	apiSpec := GetSpecForApi(APIID)
+	if apiSpec == nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "api",
 			"apiID":  APIID,
@@ -1852,7 +1842,21 @@ func getOauthClients(APIID string) ([]byte, int) {
 		return responseMessage, 400
 	}
 
-	thisClientData, getClientsErr := thisAPISpec.OAuthManager.OsinServer.Storage.GetClients(filterID, true)
+	if apiSpec.OAuthManager == nil {
+		log.WithFields(logrus.Fields{
+			"prefix": "api",
+			"apiID":  APIID,
+			"status": "fail",
+			"err":    "API not found",
+		}).Error("Failed to retrieve OAuth client list.")
+
+		notAvailable := APIStatusMessage{"error", "OAuth client list isn't available or hasn't been propagated yet."}
+		responseMessage, _ = json.Marshal(&notAvailable)
+
+		return responseMessage, 400
+	}
+
+	clientData, getClientsErr := apiSpec.OAuthManager.OsinServer.Storage.GetClients(filterID, true)
 	if getClientsErr != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "api",
@@ -1864,7 +1868,7 @@ func getOauthClients(APIID string) ([]byte, int) {
 		success = false
 	} else {
 		clients := []NewClientRequest{}
-		for _, osinClient := range thisClientData {
+		for _, osinClient := range clientData {
 			reportableClientData := NewClientRequest{
 				ClientID:          osinClient.GetId(),
 				ClientSecret:      osinClient.GetSecret(),
@@ -1904,7 +1908,7 @@ func getOauthClients(APIID string) ([]byte, int) {
 
 func healthCheckhandler(w http.ResponseWriter, r *http.Request) {
 	var responseMessage []byte
-	var code int = 200
+	code := 200
 
 	if r.Method == "GET" {
 		if config.HealthCheck.EnableHealthChecks {
@@ -1913,12 +1917,12 @@ func healthCheckhandler(w http.ResponseWriter, r *http.Request) {
 				code = 405
 				responseMessage = createError("missing api_id parameter")
 			} else {
-				thisAPISpec := GetSpecForApi(APIID)
-				if thisAPISpec != nil {
-					health, _ := thisAPISpec.Health.GetApiHealthValues()
-					var jsonErr error
-					responseMessage, jsonErr = json.Marshal(health)
-					if jsonErr != nil {
+				apiSpec := GetSpecForApi(APIID)
+				if apiSpec != nil {
+					health, _ := apiSpec.Health.GetApiHealthValues()
+					var err error
+					responseMessage, err = json.Marshal(health)
+					if err != nil {
 						code = 405
 						responseMessage = createError("Failed to encode data")
 					}
@@ -1941,19 +1945,19 @@ func healthCheckhandler(w http.ResponseWriter, r *http.Request) {
 	DoJSONWrite(w, code, responseMessage)
 }
 
-func UserRatesCheck() func(http.ResponseWriter, *http.Request) {
+func UserRatesCheck() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := 200
 
-		thisSessionState := context.Get(r, SessionData)
-		if thisSessionState == nil {
+		sessionState := context.Get(r, SessionData)
+		if sessionState == nil {
 			code = 405
 			responseMessage := createError("Health checks are not enabled for this node")
 			DoJSONWrite(w, code, responseMessage)
 			return
 		}
 
-		userSession := thisSessionState.(SessionState)
+		userSession := sessionState.(SessionState)
 		returnSession := PublicSessionState{}
 		returnSession.Quota.QuotaRenews = userSession.QuotaRenews
 		returnSession.Quota.QuotaRemaining = userSession.QuotaRemaining
@@ -1976,8 +1980,7 @@ func UserRatesCheck() func(http.ResponseWriter, *http.Request) {
 }
 
 func getIPHelper(r *http.Request) string {
-
-	var thisIP string
+	var ip string
 	if clientIP, _, derr := net.SplitHostPort(r.RemoteAddr); derr == nil {
 		// If we aren't the first proxy retain prior
 		// X-Forwarded-For information as a comma+space
@@ -1985,15 +1988,14 @@ func getIPHelper(r *http.Request) string {
 		if prior, ok := r.Header["X-Forwarded-For"]; ok {
 			clientIP = strings.Join(prior, ", ") + ", " + clientIP
 		}
-		thisIP = clientIP
+		ip = clientIP
 	}
-
-	return thisIP
+	return ip
 }
 
 func invalidateCacheHandler(w http.ResponseWriter, r *http.Request) {
 	var responseMessage []byte
-	var code int = 200
+	code := 200
 
 	if r.Method == "DELETE" {
 		APIID := r.URL.Path[len("/tyk/cache/"):]
@@ -2004,8 +2006,7 @@ func invalidateCacheHandler(w http.ResponseWriter, r *http.Request) {
 			orgid = spec.OrgID
 		}
 
-		err := HandleInvalidateAPICache(APIID)
-		if err != nil {
+		if err := HandleInvalidateAPICache(APIID); err != nil {
 			log.WithFields(logrus.Fields{
 				"prefix":      "api",
 				"api_id":      APIID,
@@ -2036,7 +2037,6 @@ func invalidateCacheHandler(w http.ResponseWriter, r *http.Request) {
 			"path":        "--",
 			"server_name": "system",
 		}).Info("Cache invalidated successfully")
-		code = 200
 	} else {
 		// Return Not supported message (and code)
 		code = 405
@@ -2049,9 +2049,9 @@ func invalidateCacheHandler(w http.ResponseWriter, r *http.Request) {
 func HandleInvalidateAPICache(APIID string) error {
 	keyPrefix := "cache-" + strings.Replace(APIID, "/", "", -1)
 	matchPattern := keyPrefix + "*"
-	thisStore := GetGlobalLocalCacheStorageHandler(keyPrefix, false)
+	store := GetGlobalLocalCacheStorageHandler(keyPrefix, false)
 
-	ok := thisStore.DeleteScanMatch(matchPattern)
+	ok := store.DeleteScanMatch(matchPattern)
 	if !ok {
 		return errors.New("Scan/delete failed")
 	}

@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/mitchellh/mapstructure"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/mitchellh/mapstructure"
 )
 
 type RevProxyTransform struct {
@@ -13,9 +14,7 @@ type RevProxyTransform struct {
 }
 
 type HeaderTransformOptions struct {
-	RevProxyTransform RevProxyTransform `mapstructure:"rev_proxy_header_cleanup" \
-	bson:"rev_proxy_header_cleanup" \
-	json:"rev_proxy_header_cleanup"`
+	RevProxyTransform RevProxyTransform `mapstructure:"rev_proxy_header_cleanup" bson:"rev_proxy_header_cleanup" json:"rev_proxy_header_cleanup"`
 }
 
 type HeaderTransform struct {
@@ -24,19 +23,18 @@ type HeaderTransform struct {
 }
 
 func (h HeaderTransform) New(c interface{}, spec *APISpec) (TykResponseHandler, error) {
-	thisHandler := HeaderTransform{}
-	thisModuleConfig := HeaderTransformOptions{}
+	handler := HeaderTransform{}
+	moduleConfig := HeaderTransformOptions{}
 
-	err := mapstructure.Decode(c, &thisModuleConfig)
+	err := mapstructure.Decode(c, &moduleConfig)
 	if err != nil {
 		log.Error(err)
 		return nil, err
 	}
 
-	thisHandler.config = thisModuleConfig
-	thisHandler.Spec = spec
-
-	return thisHandler, nil
+	handler.config = moduleConfig
+	handler.Spec = spec
+	return handler, nil
 }
 
 func (h HeaderTransform) HandleResponse(rw http.ResponseWriter,

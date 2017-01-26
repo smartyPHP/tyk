@@ -2,19 +2,20 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/TykTechnologies/logrus"
-	"github.com/TykTechnologies/drl"
 	"time"
+
+	"github.com/TykTechnologies/drl"
+	"github.com/TykTechnologies/logrus"
 )
 
-var DRLManager drl.DRL
+var DRLManager = &drl.DRL{}
 
 func SetupDRL() {
-	thisDRLManager := drl.DRL{}
-	thisDRLManager.Init()
-	thisDRLManager.ThisServerID = NodeID + "|" + HostDetails.Hostname
-	log.Debug("DRL: Setting node ID: ", thisDRLManager.ThisServerID)
-	DRLManager = thisDRLManager
+	drlManager := &drl.DRL{}
+	drlManager.Init()
+	drlManager.ThisServerID = NodeID + "|" + HostDetails.Hostname
+	log.Debug("DRL: Setting node ID: ", drlManager.ThisServerID)
+	DRLManager = drlManager
 }
 
 func StartRateLimitNotifications() {
@@ -39,14 +40,14 @@ func StartRateLimitNotifications() {
 
 func getTagHash() string {
 	th := ""
-	for _, tag := range(config.DBAppConfOptions.Tags) {
+	for _, tag := range config.DBAppConfOptions.Tags {
 		th += tag
 	}
 	return th
 }
 
 func NotifyCurrentServerStatus() {
-	if DRLManager.Ready == false {
+	if !DRLManager.Ready {
 		return
 	}
 
@@ -55,16 +56,16 @@ func NotifyCurrentServerStatus() {
 		rate = 1
 	}
 
-	thisServer := drl.Server{
+	server := drl.Server{
 		HostName:   HostDetails.Hostname,
 		ID:         NodeID,
 		LoadPerSec: rate,
 		TagHash:    getTagHash(),
 	}
 
-	asJson, jsErr := json.Marshal(thisServer)
-	if jsErr != nil {
-		log.Error("Failed to encode payload: ", jsErr)
+	asJson, err := json.Marshal(server)
+	if err != nil {
+		log.Error("Failed to encode payload: ", err)
 		return
 	}
 
@@ -77,19 +78,19 @@ func NotifyCurrentServerStatus() {
 }
 
 func OnServerStatusReceivedHandler(payload string) {
-	thisServerData := drl.Server{}
-	jsErr := json.Unmarshal([]byte(payload), &thisServerData)
-	if jsErr != nil {
+	serverData := drl.Server{}
+	err := json.Unmarshal([]byte(payload), &serverData)
+	if err != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
-		}).Error("Failed unmarshal server data: ", jsErr)
+		}).Error("Failed unmarshal server data: ", err)
 		return
 	}
 
-	log.Debug("Received DRL data: ", thisServerData)
+	log.Debug("Received DRL data: ", serverData)
 
 	if DRLManager.Ready {
-		DRLManager.AddOrUpdateServer(thisServerData)
+		DRLManager.AddOrUpdateServer(serverData)
 		log.Debug(DRLManager.Report())
 	} else {
 		log.Warning("DRL not ready, skipping this notification")

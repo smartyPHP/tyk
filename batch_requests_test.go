@@ -1,51 +1,12 @@
 package main
 
 import (
-	"fmt"
-	"github.com/justinas/alice"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
-	"time"
 )
 
-func createBatchTestSession() SessionState {
-	var thisSession SessionState
-	thisSession.Rate = 1.0
-	thisSession.Allowance = thisSession.Rate
-	thisSession.LastCheck = time.Now().Unix()
-	thisSession.Per = 100000
-	thisSession.Expires = -1
-	thisSession.QuotaRenewalRate = 30000000
-	thisSession.QuotaRenews = time.Now().Unix()
-	thisSession.QuotaRemaining = 10
-	thisSession.QuotaMax = 10
-
-	return thisSession
-}
-
-func getBatchTestChain(spec APISpec) http.Handler {
-	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
-	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
-	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
-	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
-	remote, _ := url.Parse("http://httpbin.org/")
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
-	chain := alice.New(
-		CreateMiddleware(&IPWhiteListMiddleware{TykMiddleware: tykMiddleware}, tykMiddleware),
-		CreateMiddleware(&AuthKey{tykMiddleware}, tykMiddleware),
-		CreateMiddleware(&VersionCheck{TykMiddleware: tykMiddleware}, tykMiddleware),
-		CreateMiddleware(&KeyExpired{tykMiddleware}, tykMiddleware),
-		CreateMiddleware(&AccessRightsCheck{tykMiddleware}, tykMiddleware),
-		CreateMiddleware(&RateLimitAndQuotaCheck{tykMiddleware}, tykMiddleware)).Then(proxyHandler)
-
-	return chain
-}
-
-var BatchTestDef string = `
+var BatchTestDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -86,33 +47,33 @@ var BatchTestDef string = `
 
 `
 
-var testBatchRequest string = `
+var testBatchRequest = `
 
 {
-    "requests": [
-        {
-            "method": "GET",
-            "headers": {
-                "test-header-1": "test-1",
-                "test-header-2": "test-2"
-            },
-            "body": "",
-            "relative_url": "get/?param1=this"
-        },
-        {
-            "method": "POST",
-            "headers": {},
-            "body": "TEST BODY",
-            "relative_url": "post/"
-        },
-        {
-            "method": "PUT",
-            "headers": {},
-            "body": "",
-            "relative_url": "put/"
-        }
-    ],
-    "suppress_parallel_execution": true
+	"requests": [
+	{
+		"method": "GET",
+		"headers": {
+			"test-header-1": "test-1",
+			"test-header-2": "test-2"
+		},
+		"body": "",
+		"relative_url": "get/?param1=this"
+	},
+	{
+		"method": "POST",
+		"headers": {},
+		"body": "TEST BODY",
+		"relative_url": "post/"
+	},
+	{
+		"method": "PUT",
+		"headers": {},
+		"body": "",
+		"relative_url": "put/"
+	}
+	],
+	"suppress_parallel_execution": true
 }
 
 `
@@ -124,7 +85,7 @@ func TestBatchSuccess(t *testing.T) {
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 
-	batchHandler := BatchRequestHandler{API: &spec}
+	batchHandler := BatchRequestHandler{API: spec}
 
 	r, _ := http.NewRequest("POST", "/vi/tyk/batch/", strings.NewReader(testBatchRequest))
 
@@ -146,7 +107,7 @@ func TestBatchSuccess(t *testing.T) {
 
 	requestSet, createReqErr := batchHandler.ConstructRequests(batchRequest, false)
 	if createReqErr != nil {
-		t.Error(fmt.Sprintf("Batch request creation failed , request structure malformed"))
+		t.Error("Batch request creation failed , request structure malformed")
 	}
 
 	if len(requestSet) != 3 {
@@ -170,7 +131,7 @@ func TestMakeSyncRequest(t *testing.T) {
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 
-	batchHandler := BatchRequestHandler{API: &spec}
+	batchHandler := BatchRequestHandler{API: spec}
 
 	relURL := "/"
 	thisRequest, _ := http.NewRequest("GET", "http://example.com/", nil)
@@ -198,7 +159,7 @@ func TestMakeASyncRequest(t *testing.T) {
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 
-	batchHandler := BatchRequestHandler{API: &spec}
+	batchHandler := BatchRequestHandler{API: spec}
 
 	relURL := "/"
 	thisRequest, _ := http.NewRequest("GET", "http://example.com/", nil)

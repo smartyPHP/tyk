@@ -2,9 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/TykTechnologies/logrus"
-	"strings"
 	"strconv"
+	"strings"
+
+	"github.com/TykTechnologies/logrus"
 )
 
 type DashboardConfigPayload struct {
@@ -16,26 +17,26 @@ type DashboardConfigPayload struct {
 	TimeStamp int64
 }
 
-func createConnectionStringFromDashboardObject(thisConfig DashboardConfigPayload) string {
-	thisHostname := "http://"
-	if thisConfig.DashboardConfig.UseTLS {
-		thisHostname = "https://"
+func createConnectionStringFromDashboardObject(config DashboardConfigPayload) string {
+	hostname := "http://"
+	if config.DashboardConfig.UseTLS {
+		hostname = "https://"
 	}
 
-	thisHostname = thisHostname + thisConfig.DashboardConfig.Hostname
+	hostname = hostname + config.DashboardConfig.Hostname
 
-	if thisConfig.DashboardConfig.Port != 0 {
-		strings.TrimRight(thisHostname, "/")
-		thisHostname = thisHostname + ":" + strconv.Itoa(thisConfig.DashboardConfig.Port)
+	if config.DashboardConfig.Port != 0 {
+		hostname = strings.TrimRight(hostname, "/")
+		hostname = hostname + ":" + strconv.Itoa(config.DashboardConfig.Port)
 	}
 
-	return thisHostname
+	return hostname
 }
 
 func HandleDashboardZeroConfMessage(payload string) {
 	// Decode the configuration from the payload
-	thisDashboardPayload := DashboardConfigPayload{}
-	err := json.Unmarshal([]byte(payload), &thisDashboardPayload)
+	dashPayload := DashboardConfigPayload{}
+	err := json.Unmarshal([]byte(payload), &dashPayload)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "pub-sub",
@@ -51,15 +52,15 @@ func HandleDashboardZeroConfMessage(payload string) {
 		return
 	}
 
-	thisHostname := createConnectionStringFromDashboardObject(thisDashboardPayload)
+	hostname := createConnectionStringFromDashboardObject(dashPayload)
 	setHostname := false
 	if config.DBAppConfOptions.ConnectionString == "" {
-		config.DBAppConfOptions.ConnectionString = thisHostname
+		config.DBAppConfOptions.ConnectionString = hostname
 		setHostname = true
 	}
 
 	if config.Policies.PolicyConnectionString == "" {
-		config.Policies.PolicyConnectionString = thisHostname
+		config.Policies.PolicyConnectionString = hostname
 		setHostname = true
 	}
 

@@ -2,8 +2,9 @@ package main
 
 import (
 	"errors"
-	ldap "github.com/mavricknz/ldap"
 	"strings"
+
+	ldap "github.com/mavricknz/ldap"
 )
 
 // LDAPStorageHandler implements StorageHandler, this is a read-only implementation to access keys from an LDAP service
@@ -38,8 +39,7 @@ func (l *LDAPStorageHandler) LoadConfFromMeta(confMeta interface{}) {
 
 func (l *LDAPStorageHandler) Connect() bool {
 	conn := ldap.NewLDAPConnection(l.LDAPServer, l.LDAPPort)
-	err := conn.Connect()
-	if err != nil {
+	if err := conn.Connect(); err != nil {
 		log.Error("LDAP server connection failed: ", err)
 		return false
 	}

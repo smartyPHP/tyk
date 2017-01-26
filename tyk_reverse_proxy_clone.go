@@ -9,9 +9,6 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
-	"github.com/TykTechnologies/logrus"
-	"github.com/gorilla/context"
-	"github.com/pmylund/go-cache"
 	"io"
 	"io/ioutil"
 	"net"
@@ -21,26 +18,35 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"github.com/TykTechnologies/tykcommon"
 
+	"github.com/TykTechnologies/logrus"
+	"github.com/TykTechnologies/tykcommon"
+	"github.com/gorilla/context"
+	"github.com/pmylund/go-cache"
 )
 
 var ServiceCache *cache.Cache
 
 func GetURLFromService(spec *APISpec) (*tykcommon.HostList, error) {
 
-	doCacheRefresh := func () (*tykcommon.HostList, error) {
+	doCacheRefresh := func() (*tykcommon.HostList, error) {
 		log.Debug("--> Refreshing")
 		spec.ServiceRefreshInProgress = true
 		sd := ServiceDiscovery{}
 		sd.New(&spec.Proxy.ServiceDiscovery)
-		data, err := sd.GetTarget(spec.Proxy.ServiceDiscovery.QueryEndpoint)	
+		data, err := sd.GetTarget(spec.Proxy.ServiceDiscovery.QueryEndpoint)
 		if err == nil {
 			// Set the cached value
 			if data.Len() == 0 {
 				spec.HasRun = true
 				spec.ServiceRefreshInProgress = false
 				log.Warning("[PROXY][SD] Service Discovery returned empty host list! Returning last good set.")
+
+				if spec.LastGoodHostList == nil {
+					log.Warning("[PROXY][SD] Last good host list is nil, returning empty set.")
+					spec.LastGoodHostList = tykcommon.NewHostList()
+				}
+
 				return spec.LastGoodHostList, nil
 			}
 
@@ -68,12 +74,10 @@ func GetURLFromService(spec *APISpec) (*tykcommon.HostList, error) {
 			// Are we already refreshing the cache? skip and return last good conf
 			log.Debug("Cache expired! But service refresh in progress")
 			return spec.LastGoodHostList, nil
-		} else {
-			// Refresh the spec
-			log.Debug("Cache expired! Refreshing...")
-			return doCacheRefresh()
 		}
-		
+		// Refresh the spec
+		log.Debug("Cache expired! Refreshing...")
+		return doCacheRefresh()
 	}
 
 	log.Debug("Returning from cache.")
@@ -101,7 +105,7 @@ func GetNextTarget(targetData *tykcommon.HostList, spec *APISpec, tryCount int) 
 		spec.RoundRobin.SetMax(targetData)
 
 		pos := spec.RoundRobin.GetPos()
-		if pos > (targetData.Len() - 1) {
+		if pos > targetData.Len()-1 {
 			// problem
 			spec.RoundRobin.SetMax(targetData)
 			pos = 0
@@ -113,11 +117,11 @@ func GetNextTarget(targetData *tykcommon.HostList, spec *APISpec, tryCount int) 
 			return gotHost
 		}
 
-		thisHost := EnsureTransport(gotHost)
+		host := EnsureTransport(gotHost)
 
 		// Check hosts against uptime tests
 		if spec.Proxy.CheckHostAgainstUptimeTests {
-			if !GlobalHostChecker.IsHostDown(thisHost) {
+			if !GlobalHostChecker.IsHostDown(host) {
 				// Don't overdo it
 				if tryCount < targetData.Len() {
 					// Host is down, skip
@@ -127,7 +131,7 @@ func GetNextTarget(targetData *tykcommon.HostList, spec *APISpec, tryCount int) 
 			}
 		}
 
-		return thisHost
+		return host
 	}
 	// Use standard target - might still be service data
 	log.Debug("TARGET DATA:", targetData)
@@ -200,7 +204,7 @@ func TykNewSingleHostReverseProxy(target *url.URL, spec *APISpec) *ReverseProxy 
 			// no override, better check if LB is enabled
 			if spec.Proxy.EnableLoadBalancing {
 				// it is, lets get that target data
-				lbRemote, lbErr := url.Parse(GetNextTarget(&spec.Proxy.StructuredTargetList, spec, 0))
+				lbRemote, lbErr := url.Parse(GetNextTarget(spec.Proxy.StructuredTargetList, spec, 0))
 				if lbErr != nil {
 					log.Error("[PROXY] [LOAD BALANCING] Couldn't parse target URL:", lbErr)
 				} else {
@@ -233,7 +237,7 @@ func TykNewSingleHostReverseProxy(target *url.URL, spec *APISpec) *ReverseProxy 
 		}
 
 		// No override, and no load balancing? Use the existing target
-		var targetToUse *url.URL = target
+		targetToUse := target
 		if switchTargets {
 			targetToUse = newTarget
 		}
@@ -303,8 +307,8 @@ func getMaxIdleConns() int {
 	return config.MaxIdleConnsPerHost
 }
 
-var TykDefaultTransport *TykTransporter = &TykTransporter{http.Transport{
-	Proxy: http.ProxyFromEnvironment,
+var TykDefaultTransport = &TykTransporter{http.Transport{
+	Proxy:               http.ProxyFromEnvironment,
 	MaxIdleConnsPerHost: getMaxIdleConns(),
 	Dial: (&net.Dialer{
 		Timeout:   30 * time.Second,
@@ -343,11 +347,9 @@ func singleJoiningSlash(a, b string) string {
 		if len(b) > 0 {
 			log.Debug(a + b)
 			return a + "/" + b
-		} else {
-			log.Debug(a + b)
-			return a
 		}
-
+		log.Debug(a + b)
+		return a
 	}
 	log.Debug(a + b)
 	return a + b
@@ -374,14 +376,6 @@ var hopHeaders = []string{
 	"Upgrade",
 }
 
-func (p *ReverseProxy) ReturnRequestServeHttp(rw http.ResponseWriter, req *http.Request) *http.Request {
-	outreq := new(http.Request)
-
-	p.ServeHTTP(rw, req)
-
-	return outreq
-}
-
 func (p *ReverseProxy) New(c interface{}, spec *APISpec) (TykResponseHandler, error) {
 	p.ErrorHandler = ErrorHandler{TykMiddleware: &TykMiddleware{spec, p}}
 	return nil, nil
@@ -401,20 +395,12 @@ func (p *ReverseProxy) CheckHardTimeoutEnforced(spec *APISpec, req *http.Request
 		return false, 0
 	}
 
-	var stat RequestStatus
-	var meta interface{}
-	var found bool
-
 	_, versionPaths, _, _ := spec.GetVersionData(req)
-	found, meta = spec.CheckSpecMatchesStatus(req.URL.Path, req.Method, versionPaths, HardTimeout)
+	found, meta := spec.CheckSpecMatchesStatus(req.URL.Path, req.Method, versionPaths, HardTimeout)
 	if found {
-		stat = StatusHardTimeout
-	}
-
-	if stat == StatusHardTimeout {
-		thisMeta := meta.(*int)
-		log.Debug("HARD TIMEOUT ENFORCED: ", *thisMeta)
-		return true, *thisMeta
+		intMeta := meta.(*int)
+		log.Debug("HARD TIMEOUT ENFORCED: ", *intMeta)
+		return true, *intMeta
 	}
 
 	return false, 0
@@ -425,52 +411,43 @@ func (p *ReverseProxy) CheckCircuitBreakerEnforced(spec *APISpec, req *http.Requ
 		return false, nil
 	}
 
-	var stat RequestStatus
-	var meta interface{}
-	var found bool
-
 	_, versionPaths, _, _ := spec.GetVersionData(req)
-	found, meta = spec.CheckSpecMatchesStatus(req.URL.Path, req.Method, versionPaths, CircuitBreaker)
+	found, meta := spec.CheckSpecMatchesStatus(req.URL.Path, req.Method, versionPaths, CircuitBreaker)
 	if found {
-		stat = StatusCircuitBreaker
-	}
-
-	if stat == StatusCircuitBreaker {
-		thisMeta := meta.(*ExtendedCircuitBreakerMeta)
-		log.Debug("CB Enforced for path: ", *thisMeta)
-		return true, thisMeta
+		exMeta := meta.(*ExtendedCircuitBreakerMeta)
+		log.Debug("CB Enforced for path: ", *exMeta)
+		return true, exMeta
 	}
 
 	return false, nil
 }
 
 func GetTransport(timeOut int, rw http.ResponseWriter, req *http.Request, p *ReverseProxy) http.RoundTripper {
-	var thisTransport *TykTransporter = TykDefaultTransport
+	transport := TykDefaultTransport
 
 	// Use the default unless we've modified the timout
 	if timeOut > 0 {
 		log.Debug("Setting timeout for outbound request to: ", timeOut)
-		thisTransport.SetDialFunc((&net.Dialer{
+		transport.SetDialFunc((&net.Dialer{
 			Timeout:   time.Duration(timeOut) * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).Dial)
-		thisTransport.SetTimeout(timeOut)
+		transport.SetTimeout(timeOut)
 
 	}
 
 	if IsWebsocket(req) {
-		wsTransport := &WSDialer{*thisTransport, rw, p.TLSClientConfig}
+		wsTransport := &WSDialer{transport, rw, p.TLSClientConfig}
 		return wsTransport
 	}
 
-	return thisTransport
+	return transport
 }
 
 func (p *ReverseProxy) WrappedServeHTTP(rw http.ResponseWriter, req *http.Request, withCache bool) *http.Response {
-	transport := p.Transport
 	// 1. Check if timeouts are set for this endpoint
 	_, timeout := p.CheckHardTimeoutEnforced(p.TykAPISpec, req)
-	transport = GetTransport(timeout, rw, req, p)
+	transport := GetTransport(timeout, rw, req, p)
 
 	// Do this before we make a shallow copy
 	sessVal := context.Get(req, SessionData)
@@ -526,7 +503,7 @@ func (p *ReverseProxy) WrappedServeHTTP(rw http.ResponseWriter, req *http.Reques
 		}
 	}
 
-	var thisIP string
+	var ip string
 	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
 		// If we aren't the first proxy retain prior
 		// X-Forwarded-For information as a comma+space
@@ -535,7 +512,7 @@ func (p *ReverseProxy) WrappedServeHTTP(rw http.ResponseWriter, req *http.Reques
 			clientIP = strings.Join(prior, ", ") + ", " + clientIP
 		}
 		outreq.Header.Set("X-Forwarded-For", clientIP)
-		thisIP = clientIP
+		ip = clientIP
 	}
 
 	// Circuit breaker
@@ -582,7 +559,7 @@ func (p *ReverseProxy) WrappedServeHTTP(rw http.ResponseWriter, req *http.Reques
 
 		log.WithFields(logrus.Fields{
 			"prefix":      "proxy",
-			"user_ip":     thisIP,
+			"user_ip":     ip,
 			"server_name": outreq.Host,
 			"user_id":     obfuscated,
 			"user_name":   alias,

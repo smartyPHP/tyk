@@ -32,11 +32,6 @@ type SessionHandler interface {
 	ResetQuota(string, SessionState)
 }
 
-type KeyGenerator interface {
-	GenerateAuthKey(OrgID string) string
-	GenerateHMACSecret() string
-}
-
 // DefaultAuthorisationManager implements AuthorisationHandler,
 // requires a StorageHandler to interact with key store
 type DefaultAuthorisationManager struct {
@@ -79,10 +74,7 @@ func (b DefaultAuthorisationManager) IsKeyAuthorised(keyName string) (SessionSta
 func (b DefaultAuthorisationManager) IsKeyExpired(newSession *SessionState) bool {
 	if newSession.Expires >= 1 {
 		//diff := newSession.Expires - time.Now().Unix()
-		if time.Now().After(time.Unix(newSession.Expires, 0)) {
-			return true
-		}
-		return false
+		return time.Now().After(time.Unix(newSession.Expires, 0))
 	}
 	return false
 }
@@ -124,12 +116,10 @@ func (b DefaultSessionManager) UpdateSession(keyName string, session SessionStat
 
 	// Keep the TTL
 	if config.UseAsyncSessionWrite {
-		go b.Store.SetKey(keyName, string(v), int64(resetTTLTo))
+		go b.Store.SetKey(keyName, string(v), resetTTLTo)
 		return nil
 	}
-	err := b.Store.SetKey(keyName, string(v), int64(resetTTLTo))
-	return err
-
+	return b.Store.SetKey(keyName, string(v), resetTTLTo)
 }
 
 func (b DefaultSessionManager) RemoveSession(keyName string) {
@@ -139,24 +129,24 @@ func (b DefaultSessionManager) RemoveSession(keyName string) {
 // GetSessionDetail returns the session detail using the storage engine (either in memory or Redis)
 func (b DefaultSessionManager) GetSessionDetail(keyName string) (SessionState, bool) {
 	jsonKeyVal, err := b.Store.GetKey(keyName)
-	var thisSession SessionState
+	var session SessionState
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"prefix":      "auth-mgr",
 			"inbound-key": ObfuscateKeyString(keyName),
 			"err":         err,
 		}).Debug("Could not get session detail, key not found")
-		return thisSession, false
+		return session, false
 	}
 
-	if marshalErr := json.Unmarshal([]byte(jsonKeyVal), &thisSession); marshalErr != nil {
+	if marshalErr := json.Unmarshal([]byte(jsonKeyVal), &session); marshalErr != nil {
 		log.Error("Couldn't unmarshal session object (may be cache miss): ", marshalErr)
-		return thisSession, false
+		return session, false
 	}
 
-	thisSession.SetFirstSeenHash()
+	session.SetFirstSeenHash()
 
-	return thisSession, true
+	return session, true
 }
 
 // GetSessions returns all sessions in the key store that match a filter key (a prefix)

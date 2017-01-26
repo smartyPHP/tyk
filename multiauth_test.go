@@ -13,7 +13,7 @@ import (
 	"github.com/justinas/alice"
 )
 
-var multiAuthDev string = `
+var multiAuthDev = `
 
 	{
 		"name": "Tyk Test API",
@@ -65,7 +65,7 @@ func createMultiAuthKeyAuthSession() SessionState {
 	thisSession.QuotaRenews = time.Now().Unix()
 	thisSession.QuotaRemaining = 900
 	thisSession.QuotaMax = 10
-	thisSession.AccessRights = map[string]AccessDefinition{"55": AccessDefinition{APIName: "Tyk Multi Key Test", APIID: "55", Versions: []string{"default"}}}
+	thisSession.AccessRights = map[string]AccessDefinition{"55": {APIName: "Tyk Multi Key Test", APIID: "55", Versions: []string{"default"}}}
 
 	return thisSession
 }
@@ -82,20 +82,20 @@ func createMultiBasicAuthSession() SessionState {
 	thisSession.QuotaRemaining = 1
 	thisSession.QuotaMax = -1
 	thisSession.BasicAuthData.Password = "TEST"
-	thisSession.AccessRights = map[string]AccessDefinition{"55": AccessDefinition{APIName: "Tyk Multi Key Test", APIID: "55", Versions: []string{"default"}}}
+	thisSession.AccessRights = map[string]AccessDefinition{"55": {APIName: "Tyk Multi Key Test", APIID: "55", Versions: []string{"default"}}}
 
 	return thisSession
 }
 
-func getMultiAuthStandardAndBasicAuthChain(spec APISpec) http.Handler {
+func getMultiAuthStandardAndBasicAuthChain(spec *APISpec) http.Handler {
 	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
 	remote, _ := url.Parse("http://example.com/")
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
+	proxy := TykNewSingleHostReverseProxy(remote, spec)
+	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, spec))
+	tykMiddleware := &TykMiddleware{spec, proxy}
 	chain := alice.New(
 		CreateMiddleware(&IPWhiteListMiddleware{tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&BasicAuthKeyIsValid{tykMiddleware}, tykMiddleware),

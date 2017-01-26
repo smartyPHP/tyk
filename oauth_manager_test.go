@@ -8,29 +8,29 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/gorilla/mux"
-	"github.com/justinas/alice"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/gorilla/mux"
+	"github.com/justinas/alice"
 )
 
 const (
-	T_REDIRECT_URI     string = "http://client.oauth.com"
-	T_REDIRECT_URI2    string = "http://client2.oauth.com"
-	T_CLIENT_ID        string = "1234"
-	T_CLIENT_SECRET    string = "aabbccdd"
-	P_CLIENT_ID        string = "4321"
+	T_REDIRECT_URI  = "http://client.oauth.com"
+	T_REDIRECT_URI2 = "http://client2.oauth.com"
+	T_CLIENT_ID     = "1234"
+	T_CLIENT_SECRET = "aabbccdd"
 )
 
 var keyRules = `
 {     "last_check": 1402492859,     "org_id": "53ac07777cbb8c2d53000002",     "allowance": 0,     "rate": 1,     "per": 1,     "expires": 0,     "quota_max": -1,     "quota_renews": 1399567002,     "quota_remaining": 10,     "quota_renewal_rate": 300 }
 `
 
-var oauthDefinition string = `
+var oauthDefinition = `
 	{
 		"name": "OAUTH Test API",
 		"api_id": "999999",
@@ -77,22 +77,22 @@ var oauthDefinition string = `
 	}
 `
 
-func createOauthAppDefinition() APISpec {
+func createOauthAppDefinition() *APISpec {
 	return createDefinitionFromString(oauthDefinition)
 }
 
-func getOAuthChain(spec APISpec, Muxer *mux.Router) {
+func getOAuthChain(spec *APISpec, Muxer *mux.Router) {
 	// Ensure all the correct ahndlers are in place
 	loadAPIEndpoints(Muxer)
 	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	spec.Init(&redisStore, &redisStore, healthStore, orgStore)
-	addOAuthHandlers(&spec, Muxer, true)
+	addOAuthHandlers(spec, Muxer, true)
 	remote, _ := url.Parse("http://example.com/")
-	proxy := TykNewSingleHostReverseProxy(remote, &spec)
-	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, &spec))
-	tykMiddleware := &TykMiddleware{&spec, proxy}
+	proxy := TykNewSingleHostReverseProxy(remote, spec)
+	proxyHandler := http.HandlerFunc(ProxyHandler(proxy, spec))
+	tykMiddleware := &TykMiddleware{spec, proxy}
 	chain := alice.New(
 		CreateMiddleware(&VersionCheck{TykMiddleware: tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&Oauth2KeyExists{tykMiddleware}, tykMiddleware),
@@ -100,7 +100,7 @@ func getOAuthChain(spec APISpec, Muxer *mux.Router) {
 		CreateMiddleware(&AccessRightsCheck{tykMiddleware}, tykMiddleware),
 		CreateMiddleware(&RateLimitAndQuotaCheck{tykMiddleware}, tykMiddleware)).Then(proxyHandler)
 
-	//ApiSpecRegister[spec.APIID] = &spec
+	//ApiSpecRegister[spec.APIID] = spec
 	Muxer.Handle(spec.Proxy.ListenPath, chain)
 }
 
@@ -112,7 +112,7 @@ func MakeOAuthAPI() *APISpec {
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
 	thisSpec.Init(&redisStore, &redisStore, healthStore, orgStore)
 
-	specs := &[]*APISpec{&thisSpec}
+	specs := &[]*APISpec{thisSpec}
 	newMuxes := mux.NewRouter()
 	loadAPIEndpoints(newMuxes)
 	loadApps(specs, newMuxes)
@@ -123,7 +123,7 @@ func MakeOAuthAPI() *APISpec {
 
 	log.Debug("OAUTH Test Reload complete")
 
-	return &thisSpec
+	return thisSpec
 }
 
 func TestAuthCodeRedirect(t *testing.T) {
@@ -337,12 +337,13 @@ func TestAPIClientAuthorizeTokenWithPolicy(t *testing.T) {
 
 	asData := make(map[string]interface{})
 	decoder := json.NewDecoder(recorder.Body)
-	marshalErr := decoder.Decode(&asData)
-	if marshalErr != nil {
-		t.Error("Decode failed: ", marshalErr)
+	if err := decoder.Decode(&asData); err != nil {
+		t.Fatal("Decode failed:", err)
 	}
-
-	token := asData["access_token"].(string)
+	token, ok := asData["access_token"].(string)
+	if !ok {
+		t.Fatal("No access token found")
+	}
 
 	// Verify the token is correct
 	key, fnd := redisStore.GetKey(token)
@@ -355,7 +356,6 @@ func TestAPIClientAuthorizeTokenWithPolicy(t *testing.T) {
 		t.Error("Policy not added to token!")
 		fmt.Println(key)
 	}
-
 }
 
 func GetAuthCode() map[string]string {
@@ -384,8 +384,7 @@ func GetAuthCode() map[string]string {
 
 	var thisResponse = map[string]string{}
 	body, _ := ioutil.ReadAll(recorder.Body)
-	err := json.Unmarshal(body, &thisResponse)
-	if err != nil {
+	if err := json.Unmarshal(body, &thisResponse); err != nil {
 		fmt.Println(err)
 	}
 
@@ -426,15 +425,14 @@ func GetToken() tokenData {
 	var thisResponse = tokenData{}
 	body, _ := ioutil.ReadAll(recorder.Body)
 	//	fmt.Println(string(body))
-	err := json.Unmarshal(body, &thisResponse)
-	if err != nil {
+	if err := json.Unmarshal(body, &thisResponse); err != nil {
 		fmt.Println(err)
 	}
 	log.Debug("TOKEN DATA: ", string(body))
 	return thisResponse
 }
 
-func TestOAuthClientCredsGrant (t *testing.T) {
+func TestOAuthClientCredsGrant(t *testing.T) {
 	thisSpec := createOauthAppDefinition()
 	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
@@ -450,7 +448,7 @@ func TestOAuthClientCredsGrant (t *testing.T) {
 	param.Set("grant_type", "client_credentials")
 	param.Set("client_id", T_CLIENT_ID)
 	param.Set("client_secret", T_CLIENT_SECRET)
-	
+
 	req, _ := http.NewRequest(method, uri, bytes.NewBufferString(param.Encode()))
 	req.Header.Set("Authorization", "Basic MTIzNDphYWJiY2NkZA==")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -467,7 +465,7 @@ func TestOAuthClientCredsGrant (t *testing.T) {
 	}
 	log.Debug("TOKEN DATA: ", string(body))
 	log.Info("Access token: ", thisResponse.AccessToken)
-	
+
 	if recorder.Code != 200 {
 		t.Error("Response code should have 200 error but is: ", recorder.Code)
 		t.Error(recorder.Body)
@@ -528,8 +526,7 @@ func TestOAuthAPIRefreshInvalidate(t *testing.T) {
 
 	// thisSpec := createOauthAppDefinition()
 
-	sp := MakeOAuthAPI()
-	thisSpec := *sp
+	thisSpec := MakeOAuthAPI()
 	redisStore := RedisStorageManager{KeyPrefix: "apikey-"}
 	healthStore := &RedisStorageManager{KeyPrefix: "apihealth."}
 	orgStore := &RedisStorageManager{KeyPrefix: "orgKey."}
@@ -677,18 +674,20 @@ func TestClientRefreshRequestDouble(t *testing.T) {
 	responseData := make(map[string]interface{})
 
 	body, _ := ioutil.ReadAll(recorder.Body)
-	dErr := json.Unmarshal(body, &responseData)
-	if err != nil {
-		t.Error("Decode failed: ", dErr)
+	if err := json.Unmarshal(body, &responseData); err != nil {
+		t.Fatal("Decode failed:", err)
 	}
 	log.Debug("Refresh token body", string(body))
+	token, ok := responseData["refresh_token"].(string)
+	if !ok {
+		t.Fatal("No refresh token found")
+	}
 
 	param2 := make(url.Values)
 	param2.Set("grant_type", "refresh_token")
 	param2.Set("redirect_uri", T_REDIRECT_URI)
 	param2.Set("client_id", T_CLIENT_ID)
-
-	param2.Set("refresh_token", responseData["refresh_token"].(string))
+	param2.Set("refresh_token", token)
 	req2, err2 := http.NewRequest(method, uri, bytes.NewBufferString(param2.Encode()))
 	req2.Header.Set("Authorization", "Basic MTIzNDphYWJiY2NkZA==")
 	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")

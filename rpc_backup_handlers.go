@@ -6,16 +6,17 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"github.com/TykTechnologies/logrus"
-	"github.com/gorilla/mux"
-	"github.com/rcrowley/goagain"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/TykTechnologies/logrus"
+	"github.com/gorilla/mux"
+	"github.com/rcrowley/goagain"
 )
 
-const RPCKeyPrefix string = "rpc:"
-const BackupKeyBase string = "node-definition-backup:"
+const RPCKeyPrefix = "rpc:"
+const BackupKeyBase = "node-definition-backup:"
 
 func getTagListAsString() string {
 	tagList := ""
@@ -26,14 +27,14 @@ func getTagListAsString() string {
 	return tagList
 }
 
-func SaveRPCDefinitionsBackup(thisList string) {
+func SaveRPCDefinitionsBackup(list string) {
 	log.Info("Storing RPC backup")
 	tagList := getTagListAsString()
 
 	log.Info("--> Connecting to DB")
 
-	thisStore := &RedisClusterStorageManager{KeyPrefix: RPCKeyPrefix, HashKeys: false}
-	connected := thisStore.Connect()
+	store := &RedisClusterStorageManager{KeyPrefix: RPCKeyPrefix, HashKeys: false}
+	connected := store.Connect()
 
 	log.Info("--> Connected to DB")
 
@@ -43,8 +44,8 @@ func SaveRPCDefinitionsBackup(thisList string) {
 	}
 
 	secret := rightPad2Len(config.Secret, "=", 32)
-	cryptoText := encrypt([]byte(secret), thisList)
-	rErr := thisStore.SetKey(BackupKeyBase+tagList, cryptoText, -1)
+	cryptoText := encrypt([]byte(secret), list)
+	rErr := store.SetKey(BackupKeyBase+tagList, cryptoText, -1)
 	if rErr != nil {
 		log.Error("Failed to store node backup: ", rErr)
 	}
@@ -54,9 +55,9 @@ func LoadDefinitionsFromRPCBackup() *[]*APISpec {
 	tagList := getTagListAsString()
 	checkKey := BackupKeyBase + tagList
 
-	thisStore := &RedisClusterStorageManager{KeyPrefix: RPCKeyPrefix, HashKeys: false}
+	store := &RedisClusterStorageManager{KeyPrefix: RPCKeyPrefix, HashKeys: false}
 
-	connected := thisStore.Connect()
+	connected := store.Connect()
 	log.Info("[RPC] --> Connected to DB")
 
 	if !connected {
@@ -65,7 +66,7 @@ func LoadDefinitionsFromRPCBackup() *[]*APISpec {
 	}
 
 	secret := rightPad2Len(config.Secret, "=", 32)
-	cryptoText, rErr := thisStore.GetKey(checkKey)
+	cryptoText, rErr := store.GetKey(checkKey)
 	apiListAsString := decrypt([]byte(secret), cryptoText)
 
 	if rErr != nil {
@@ -125,10 +126,8 @@ func doLoadWithBackup(specs *[]*APISpec) {
 	RPC_EmergencyModeLoaded = true
 
 	l, goAgainErr := goagain.Listener()
-	var listenerErr error
-	
-	l, listenerErr = generateListener(l) 
-	if listenerErr != nil {
+	var err error
+	if l, err = generateListener(l); err != nil {
 		log.Info("Failed to generate listener!")
 	}
 
@@ -190,8 +189,7 @@ func decrypt(key []byte, cryptoText string) string {
 }
 
 func rightPad2Len(s string, padStr string, overallLen int) string {
-	var padCountInt int
-	padCountInt = 1 + ((overallLen - len(padStr)) / len(padStr))
-	var retStr = s + strings.Repeat(padStr, padCountInt)
+	padCountInt := 1 + (overallLen-len(padStr))/len(padStr)
+	retStr := s + strings.Repeat(padStr, padCountInt)
 	return retStr[:overallLen]
 }

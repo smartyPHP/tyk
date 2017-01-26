@@ -1,16 +1,16 @@
 package main
 
 import (
-	"encoding/json"
-	"github.com/TykTechnologies/tykcommon"
-	"github.com/lonelycode/gabs"
 	"io/ioutil"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/TykTechnologies/tykcommon"
+	"github.com/lonelycode/gabs"
 )
 
-const ARRAY_NAME string = "tyk_array"
+const ARRAY_NAME = "tyk_array"
 
 type ServiceDiscovery struct {
 	spec                *tykcommon.ServiceDiscoveryConfiguration
@@ -57,12 +57,6 @@ func (s *ServiceDiscovery) getServiceData(name string) (string, error) {
 	}
 
 	return string(contents), nil
-}
-
-func (s *ServiceDiscovery) decodeRawJsonString(value string) interface{} {
-	var thisObj interface{}
-	json.Unmarshal([]byte(value), &thisObj)
-	return &thisObj
 }
 
 func (s *ServiceDiscovery) decodeToNameSpace(namespace string, jsonParsed *gabs.Container) interface{} {
@@ -156,21 +150,17 @@ func (s *ServiceDiscovery) GetHostname(item *gabs.Container) string {
 }
 
 func (s *ServiceDiscovery) isList(val string) bool {
-	if len(val) > 0 {
-		if strings.HasPrefix(val, "[") {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(val, "[")
 }
+
 func (s *ServiceDiscovery) GetSubObjectFromList(objList *gabs.Container) *[]string {
 	hostList := []string{}
 	var hostname string
-	var thisSet *[]*gabs.Container
+	var set *[]*gabs.Container
 	if s.endpointReturnsList {
 		// pre-process the object since we've nested it
-		thisSet = s.decodeToNameSpaceAsArray(ARRAY_NAME, objList)
-		log.Debug("thisSet: ", thisSet)
+		set = s.decodeToNameSpaceAsArray(ARRAY_NAME, objList)
+		log.Debug("set: ", set)
 	} else {
 		// It's an object, but the value may be nested
 		if s.isNested {
@@ -191,36 +181,34 @@ func (s *ServiceDiscovery) GetSubObjectFromList(objList *gabs.Container) *[]stri
 				log.Debug("Yup, it's a list")
 				s.ConvertRawListToObj(&nestedString)
 				s.ParseObject(nestedString, &subContainer)
-				thisSet = s.decodeToNameSpaceAsArray(ARRAY_NAME, &subContainer)
+				set = s.decodeToNameSpaceAsArray(ARRAY_NAME, &subContainer)
 
 				// Hijack this here because we need to use a non-nested get
-				for _, item := range *thisSet {
+				for _, item := range *set {
 					log.Debug("Child in list: ", item)
 					hostname = s.GetObject(item) + s.targetPath
 					// Add to list
 					hostList = append(hostList, hostname)
 				}
 				return &hostList
-
-			} else {
-				log.Debug("Not a list")
-				switch parentData.(type) {
-				default:
-					log.Debug("parentData is not a string")
-				case string:
-					s.ParseObject(parentData.(string), &subContainer)
-					thisSet = s.decodeToNameSpaceAsArray(s.dataPath, objList)
-					log.Debug("thisSet (object list): ", objList)
-				}
+			}
+			log.Debug("Not a list")
+			switch parentData.(type) {
+			default:
+				log.Debug("parentData is not a string")
+			case string:
+				s.ParseObject(parentData.(string), &subContainer)
+				set = s.decodeToNameSpaceAsArray(s.dataPath, objList)
+				log.Debug("set (object list): ", objList)
 			}
 		} else if s.parentPath != "" {
-			thisSet = s.decodeToNameSpaceAsArray(s.parentPath, objList)
+			set = s.decodeToNameSpaceAsArray(s.parentPath, objList)
 		}
 
 	}
 
-	if thisSet != nil {
-		for _, item := range *thisSet {
+	if set != nil {
+		for _, item := range *set {
 			log.Debug("Child in list: ", item)
 			hostname = s.GetHostname(item) + s.targetPath
 			// Add to list
@@ -264,8 +252,7 @@ func (s *ServiceDiscovery) ProcessRawData(rawData string) (*tykcommon.HostList, 
 	if s.endpointReturnsList {
 		// Convert to an object
 		s.ConvertRawListToObj(&rawData)
-		err := s.ParseObject(rawData, &jsonParsed)
-		if err != nil {
+		if err := s.ParseObject(rawData, &jsonParsed); err != nil {
 			log.Error("Parse object failed: ", err)
 			return nil, err
 		}

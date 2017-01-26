@@ -14,8 +14,6 @@ type GranularAccessMiddleware struct {
 	*TykMiddleware
 }
 
-type GranularAccessMiddlewareConfig struct{}
-
 func (m *GranularAccessMiddleware) New() {}
 
 func (mw *GranularAccessMiddleware) GetName() string {
@@ -33,12 +31,11 @@ func (a *GranularAccessMiddleware) IsEnabledForSpec() bool {
 
 // ProcessRequest will run any checks on the request on the way through the system, return an error to have the chain fail
 func (m *GranularAccessMiddleware) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
-	thisSessionState := context.Get(r, SessionData).(SessionState)
+	sessionState := context.Get(r, SessionData).(SessionState)
 	authHeaderValue := context.Get(r, AuthHeaderValue).(string)
 
-	sessionVersionData, foundAPI := thisSessionState.AccessRights[m.Spec.APIID]
-
-	if foundAPI == false {
+	sessionVersionData, foundAPI := sessionState.AccessRights[m.Spec.APIID]
+	if !foundAPI {
 		log.Debug("Version not found")
 		return nil, 200
 	}

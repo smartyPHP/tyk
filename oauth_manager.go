@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
+
 	osin "github.com/lonelycode/osin"
 	"github.com/nu7hatch/gouuid"
 	"golang.org/x/crypto/bcrypt"
-	"net/http"
-	"time"
 )
 
 /*
@@ -103,11 +104,11 @@ func (o *OAuthHandlers) generateOAuthOutputFromOsinResponse(osinResponse *osin.R
 		osinResponse.Output["redirect_to"] = redirect
 	}
 
-	if respData, marshalErr := json.Marshal(&osinResponse.Output); marshalErr != nil {
+	respData, marshalErr := json.Marshal(&osinResponse.Output)
+	if marshalErr != nil {
 		return []byte{}, false
-	} else {
-		return respData, true
 	}
+	return respData, true
 
 }
 
@@ -161,7 +162,6 @@ func (o *OAuthHandlers) HandleAuthorizePassthrough(w http.ResponseWriter, r *htt
 	if r.Method == "GET" || r.Method == "POST" {
 		// Extract client data and check
 		resp := o.Manager.HandleAuthorisation(r, false, "")
-		responseMessage, _ = o.generateOAuthOutputFromOsinResponse(resp)
 		if resp.IsError {
 			log.Error("There was an error with the request")
 			log.Error(resp)
@@ -284,7 +284,7 @@ func (o *OAuthManager) HandleAuthorisation(r *http.Request, complete bool, sessi
 // HandleAccess wraps an access request with osin's primitives
 func (o *OAuthManager) HandleAccess(r *http.Request) *osin.Response {
 	resp := o.OsinServer.NewResponse()
-	var thisSessionState *SessionState
+	var sessionState *SessionState
 	var username string
 	if ar := o.OsinServer.HandleAccessRequest(resp, r); ar != nil {
 
@@ -299,22 +299,22 @@ func (o *OAuthManager) HandleAccess(r *http.Request) *osin.Response {
 			searchKey := "apikey-" + keyName
 			log.Debug("Getting: ", searchKey)
 
-			var keyErr error
-			thisSessionState, keyErr = o.OsinServer.Storage.GetUser(searchKey)
-			if keyErr != nil {
+			var err error
+			sessionState, err = o.OsinServer.Storage.GetUser(searchKey)
+			if err != nil {
 				log.Warning("Attempted access with non-existent user (OAuth password flow).")
 			} else {
 				var passMatch bool
-				if thisSessionState.BasicAuthData.Hash == HASH_BCrypt {
-					err := bcrypt.CompareHashAndPassword([]byte(thisSessionState.BasicAuthData.Password), []byte(password))
+				if sessionState.BasicAuthData.Hash == HASH_BCrypt {
+					err := bcrypt.CompareHashAndPassword([]byte(sessionState.BasicAuthData.Password), []byte(password))
 
 					if err == nil {
 						passMatch = true
 					}
 				}
 
-				if thisSessionState.BasicAuthData.Hash == HASH_PlainText {
-					if thisSessionState.BasicAuthData.Password == password {
+				if sessionState.BasicAuthData.Hash == HASH_PlainText {
+					if sessionState.BasicAuthData.Password == password {
 						passMatch = true
 					}
 				}
@@ -323,18 +323,18 @@ func (o *OAuthManager) HandleAccess(r *http.Request) *osin.Response {
 					log.Info("Here we are")
 					ar.Authorized = true
 					// not ideal, but we need to copy the session state across
-					pw := thisSessionState.BasicAuthData.Password
-					hs := thisSessionState.BasicAuthData.Hash
+					pw := sessionState.BasicAuthData.Password
+					hs := sessionState.BasicAuthData.Hash
 
-					thisSessionState.BasicAuthData.Password = ""
-					thisSessionState.BasicAuthData.Hash = ""
-					asString, _ := json.Marshal(thisSessionState)
+					sessionState.BasicAuthData.Password = ""
+					sessionState.BasicAuthData.Hash = ""
+					asString, _ := json.Marshal(sessionState)
 					ar.UserData = string(asString)
 
-					thisSessionState.BasicAuthData.Password = pw
-					thisSessionState.BasicAuthData.Hash = hs
+					sessionState.BasicAuthData.Password = pw
+					sessionState.BasicAuthData.Hash = hs
 
-					//log.Warning("Old Keys: ", thisSessionState.OauthKeys)
+					//log.Warning("Old Keys: ", sessionState.OauthKeys)
 				}
 			}
 		} else {
@@ -343,10 +343,10 @@ func (o *OAuthManager) HandleAccess(r *http.Request) *osin.Response {
 		}
 
 		// Does the user have an old OAuth token for this client?
-		if thisSessionState != nil {
-			if thisSessionState.OauthKeys != nil {
+		if sessionState != nil {
+			if sessionState.OauthKeys != nil {
 				log.Debug("There's keys here bill...")
-				oldToken, foundKey := thisSessionState.OauthKeys[ar.Client.GetId()]
+				oldToken, foundKey := sessionState.OauthKeys[ar.Client.GetId()]
 				if foundKey {
 					log.Info("Found old token, revoking: ", oldToken)
 
@@ -362,17 +362,17 @@ func (o *OAuthManager) HandleAccess(r *http.Request) *osin.Response {
 		if username != "" {
 			if foundNewToken {
 				log.Debug("Updating token data in key")
-				if thisSessionState.OauthKeys == nil {
-					thisSessionState.OauthKeys = make(map[string]string)
+				if sessionState.OauthKeys == nil {
+					sessionState.OauthKeys = make(map[string]string)
 				}
-				thisSessionState.OauthKeys[ar.Client.GetId()] = new_token.(string)
+				sessionState.OauthKeys[ar.Client.GetId()] = new_token.(string)
 				log.Debug("New token: ", new_token.(string))
-				log.Debug("Keys: ", thisSessionState.OauthKeys)
+				log.Debug("Keys: ", sessionState.OauthKeys)
 
 				keyName := o.API.OrgID + username
 
 				log.Debug("Updating user:", keyName)
-				sErr := o.API.SessionManager.UpdateSession(keyName, *thisSessionState, GetLifetime(o.API, thisSessionState))
+				sErr := o.API.SessionManager.UpdateSession(keyName, *sessionState, GetLifetime(o.API, sessionState))
 				if sErr != nil {
 					log.Error(sErr)
 				}
@@ -390,11 +390,11 @@ func (o *OAuthManager) HandleAccess(r *http.Request) *osin.Response {
 // These enums fix the prefix to use when storing various OAuth keys and data, since we
 // delegate everything to the osin framework
 const (
-	AUTH_PREFIX            string = "oauth-authorize."
-	CLIENT_PREFIX          string = "oauth-clientid."
-	ACCESS_PREFIX          string = "oauth-access."
-	REFRESH_PREFIX         string = "oauth-refresh."
-	OAUTH_CLIENTSET_PREFIX string = "oauth-clientset."
+	AUTH_PREFIX            = "oauth-authorize."
+	CLIENT_PREFIX          = "oauth-clientid."
+	ACCESS_PREFIX          = "oauth-access."
+	REFRESH_PREFIX         = "oauth-refresh."
+	OAUTH_CLIENTSET_PREFIX = "oauth-clientset."
 )
 
 type ExtendedOsinStorageInterface interface {
@@ -512,13 +512,13 @@ func (r RedisOsinStorageInterface) GetClient(id string) (osin.Client, error) {
 		return nil, storeErr
 	}
 
-	thisClient := new(OAuthClient)
-	if marshalErr := json.Unmarshal([]byte(clientJSON), &thisClient); marshalErr != nil {
+	client := new(OAuthClient)
+	if marshalErr := json.Unmarshal([]byte(clientJSON), &client); marshalErr != nil {
 		log.Error("Couldn't unmarshal OAuth client object")
 		log.Error(marshalErr)
 	}
 
-	return thisClient, nil
+	return client, nil
 }
 
 // GetClientNoPrefix will retrieve client data, but not asign a prefix - this is an unfortunate hack,
@@ -535,13 +535,13 @@ func (r RedisOsinStorageInterface) GetClientNoPrefix(id string) (osin.Client, er
 		return nil, storeErr
 	}
 
-	thisClient := new(OAuthClient)
-	if marshalErr := json.Unmarshal([]byte(clientJSON), &thisClient); marshalErr != nil {
+	client := new(OAuthClient)
+	if marshalErr := json.Unmarshal([]byte(clientJSON), &client); marshalErr != nil {
 		log.Error("Couldn't unmarshal OAuth client object")
 		log.Error(marshalErr)
 	}
 
-	return thisClient, nil
+	return client, nil
 }
 
 // GetClients will retreive a list of clients for a prefix
@@ -555,24 +555,23 @@ func (r RedisOsinStorageInterface) GetClients(filter string, ignorePrefix bool) 
 	if !config.Storage.EnableCluster {
 		clientJSON = r.store.GetKeysAndValuesWithFilter(key)
 	} else {
-		var getErr error
 		KeyForSet := OAUTH_CLIENTSET_PREFIX + CLIENT_PREFIX // Org ID
-		clientJSON, getErr = r.store.GetSet(KeyForSet)
-		if getErr != nil {
-			return []osin.Client{}, getErr
+		var err error
+		if clientJSON, err = r.store.GetSet(KeyForSet); err != nil {
+			return []osin.Client{}, err
 		}
 	}
 
 	theseClients := []osin.Client{}
 
 	for _, clientJSON := range clientJSON {
-		thisClient := new(OAuthClient)
-		if marshalErr := json.Unmarshal([]byte(clientJSON), &thisClient); marshalErr != nil {
+		client := new(OAuthClient)
+		if marshalErr := json.Unmarshal([]byte(clientJSON), &client); marshalErr != nil {
 			log.Error("Couldn't unmarshal OAuth client object")
 			log.Error(marshalErr)
 			return theseClients, marshalErr
 		}
-		theseClients = append(theseClients, thisClient)
+		theseClients = append(theseClients, client)
 	}
 
 	return theseClients, nil
@@ -627,15 +626,14 @@ func (r RedisOsinStorageInterface) DeleteClient(id string, ignorePrefix bool) er
 
 // SaveAuthorize saves authorisation data to REdis
 func (r RedisOsinStorageInterface) SaveAuthorize(authData *osin.AuthorizeData) error {
-	if authDataJSON, marshalErr := json.Marshal(&authData); marshalErr != nil {
+	authDataJSON, marshalErr := json.Marshal(&authData)
+	if marshalErr != nil {
 		return marshalErr
-	} else {
-		key := AUTH_PREFIX + authData.Code
-		log.Debug("Saving auth code: ", key)
-		r.store.SetKey(key, string(authDataJSON), int64(authData.ExpiresIn))
-		return nil
-
 	}
+	key := AUTH_PREFIX + authData.Code
+	log.Debug("Saving auth code: ", key)
+	r.store.SetKey(key, string(authDataJSON), int64(authData.ExpiresIn))
+	return nil
 
 }
 
@@ -651,15 +649,15 @@ func (r RedisOsinStorageInterface) LoadAuthorize(code string) (*osin.AuthorizeDa
 		return nil, storeErr
 	}
 
-	thisAuthData := osin.AuthorizeData{}
-	thisAuthData.Client = new(OAuthClient)
-	if marshalErr := json.Unmarshal([]byte(authJSON), &thisAuthData); marshalErr != nil {
+	authData := osin.AuthorizeData{}
+	authData.Client = new(OAuthClient)
+	if marshalErr := json.Unmarshal([]byte(authJSON), &authData); marshalErr != nil {
 		log.Error("Couldn't unmarshal OAuth auth data object (LoadAuthorize)")
 		log.Error(marshalErr)
 		return nil, marshalErr
 	}
 
-	return &thisAuthData, nil
+	return &authData, nil
 }
 
 // RemoveAuthorize removes authorisation keys from redis
@@ -723,21 +721,19 @@ func (r RedisOsinStorageInterface) SaveAccess(accessData *osin.AccessData) error
 
 	// Store the refresh token too
 	if accessData.RefreshToken != "" {
-		if accessDataJSON, marshalErr := json.Marshal(accessData); marshalErr != nil {
+		accessDataJSON, marshalErr := json.Marshal(accessData)
+		if marshalErr != nil {
 			return marshalErr
-		} else {
-			key := REFRESH_PREFIX + accessData.RefreshToken
-			log.Debug("Saving REFRESH key: ", key)
-			refreshExpire := int64(1209600) // 14 days
-			if config.OauthRefreshExpire != 0 {
-				refreshExpire = config.OauthRefreshExpire
-			}
-			r.store.SetKey(key, string(accessDataJSON), refreshExpire)
-			log.Debug("STORING ACCESS DATA: ", string(accessDataJSON))
-
-			return nil
 		}
-
+		key := REFRESH_PREFIX + accessData.RefreshToken
+		log.Debug("Saving REFRESH key: ", key)
+		refreshExpire := int64(1209600) // 14 days
+		if config.OauthRefreshExpire != 0 {
+			refreshExpire = config.OauthRefreshExpire
+		}
+		r.store.SetKey(key, string(accessDataJSON), refreshExpire)
+		log.Debug("STORING ACCESS DATA: ", string(accessDataJSON))
+		return nil
 	}
 
 	return nil
@@ -755,15 +751,15 @@ func (r RedisOsinStorageInterface) LoadAccess(token string) (*osin.AccessData, e
 		return nil, storeErr
 	}
 
-	thisAccessData := osin.AccessData{}
-	thisAccessData.Client = new(OAuthClient)
-	if marshalErr := json.Unmarshal([]byte(accessJSON), &thisAccessData); marshalErr != nil {
+	accessData := osin.AccessData{}
+	accessData.Client = new(OAuthClient)
+	if marshalErr := json.Unmarshal([]byte(accessJSON), &accessData); marshalErr != nil {
 		log.Error("Couldn't unmarshal OAuth auth data object (LoadAccess)")
 		log.Error(marshalErr)
 		return nil, marshalErr
 	}
 
-	return &thisAccessData, nil
+	return &accessData, nil
 }
 
 // RemoveAccess will remove access data from Redis
@@ -790,16 +786,16 @@ func (r RedisOsinStorageInterface) LoadRefresh(token string) (*osin.AccessData, 
 	}
 
 	// new interface means having to make this nested... ick.
-	thisAccessData := osin.AccessData{}
-	thisAccessData.Client = new(OAuthClient)
+	accessData := osin.AccessData{}
+	accessData.Client = new(OAuthClient)
 
-	if marshalErr := json.Unmarshal([]byte(accessJSON), &thisAccessData); marshalErr != nil {
+	if marshalErr := json.Unmarshal([]byte(accessJSON), &accessData); marshalErr != nil {
 		log.Error("Couldn't unmarshal OAuth auth data object (LoadRefresh): ", marshalErr)
 		log.Error("Decoding:", accessJSON)
 		return nil, marshalErr
 	}
 
-	return &thisAccessData, nil
+	return &accessData, nil
 }
 
 // RemoveRefresh will remove a refresh token from redis
@@ -810,9 +806,7 @@ func (r RedisOsinStorageInterface) RemoveRefresh(token string) error {
 }
 
 // AccessTokenGenTyk is a modified authorization token generator that uses the same method used to generate tokens for Tyk authHandler
-type AccessTokenGenTyk struct {
-	sessionManager SessionHandler
-}
+type AccessTokenGenTyk struct{}
 
 // GenerateAccessToken generates base64-encoded UUID access and refresh tokens
 func (a *AccessTokenGenTyk) GenerateAccessToken(data *osin.AccessData, generaterefresh bool) (accesstoken string, refreshtoken string, err error) {
@@ -860,15 +854,15 @@ func (r RedisOsinStorageInterface) GetUser(username string) (*SessionState, erro
 	}
 
 	// new interface means having to make this nested... ick.
-	thisSession := SessionState{}
+	session := SessionState{}
 
-	if marshalErr := json.Unmarshal([]byte(accessJSON), &thisSession); marshalErr != nil {
+	if marshalErr := json.Unmarshal([]byte(accessJSON), &session); marshalErr != nil {
 		log.Error("Couldn't unmarshal OAuth auth data object (LoadRefresh): ", marshalErr)
 		log.Error("Decoding:", accessJSON)
 		return nil, marshalErr
 	}
 
-	return &thisSession, nil
+	return &session, nil
 }
 
 func (r RedisOsinStorageInterface) SetUser(username string, sessionState *SessionState, timeout int64) error {

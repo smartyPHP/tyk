@@ -1,15 +1,12 @@
 package main
 
 import (
-	"encoding/json"
-	"github.com/TykTechnologies/tykcommon"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"testing"
 )
 
-var sampleDefiniton string = `
+var sampleDefiniton = `
 
 	{
 		"name": "Tyk Test API",
@@ -46,7 +43,7 @@ var sampleDefiniton string = `
 
 `
 
-var nonExpiringDef string = `
+var nonExpiringDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -82,7 +79,7 @@ var nonExpiringDef string = `
 
 `
 
-var nonExpiringMultiDef string = `
+var nonExpiringMultiDef = `
 
 	{
 		"name": "Tyk Test API",
@@ -127,25 +124,13 @@ var nonExpiringMultiDef string = `
 
 `
 
-func createDefinitionFromString(defStr string) APISpec {
-	var thisLoader = APIDefinitionLoader{}
-
-	thisDef, thisRawDef := thisLoader.ParseDefinition([]byte(defStr))
-	thisDef.RawData = thisRawDef
-	thisSpec := thisLoader.MakeSpec(thisDef)
-	thisSpec.APIDefinition = thisDef
-
-	return thisSpec
-}
-
-func writeDefToFile(configStruct tykcommon.APIDefinition) {
-	newConfig, err := json.Marshal(configStruct)
-	if err != nil {
-		log.Error("Problem marshalling configuration!")
-		log.Error(err)
-	} else {
-		ioutil.WriteFile("app_sample.json", newConfig, 0644)
-	}
+func createDefinitionFromString(defStr string) *APISpec {
+	var loader = APIDefinitionLoader{}
+	def, rawDef := loader.ParseDefinition([]byte(defStr))
+	def.RawData = rawDef
+	spec := loader.MakeSpec(def)
+	spec.APIDefinition = def
+	return spec
 }
 
 func TestExpiredRequest(t *testing.T) {
@@ -159,10 +144,10 @@ func TestExpiredRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	thisSpec := createDefinitionFromString(sampleDefiniton)
+	spec := createDefinitionFromString(sampleDefiniton)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as expiry date is in the past!")
 	}
 
@@ -183,13 +168,13 @@ func TestNotVersioned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	thisSpec := createDefinitionFromString(nonExpiringDef)
-	thisSpec.VersionData.NotVersioned = true
+	spec := createDefinitionFromString(nonExpiringDef)
+	spec.VersionData.NotVersioned = true
 
-	//	writeDefToFile(thisSpec.APIDefinition)
+	//	writeDefToFile(spec.APIDefinition)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok != true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if !ok {
 		t.Error("Request should pass as versioning not in play!")
 	}
 
@@ -209,10 +194,10 @@ func TestMissingVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	thisSpec := createDefinitionFromString(sampleDefiniton)
+	spec := createDefinitionFromString(sampleDefiniton)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as there is no version number!")
 	}
 
@@ -233,10 +218,10 @@ func TestWrongVersion(t *testing.T) {
 	}
 	req.Header.Add("version", "v2")
 
-	thisSpec := createDefinitionFromString(sampleDefiniton)
+	spec := createDefinitionFromString(sampleDefiniton)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as version number is wrong!")
 	}
 
@@ -256,10 +241,10 @@ func TestBlacklistLinks(t *testing.T) {
 	}
 	req.Header.Add("version", "v1")
 
-	thisSpec := createDefinitionFromString(nonExpiringDef)
+	spec := createDefinitionFromString(nonExpiringDef)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as URL is blacklisted!")
 	}
 
@@ -277,8 +262,8 @@ func TestBlacklistLinks(t *testing.T) {
 	}
 	req.Header.Add("version", "v1")
 
-	ok, status, _ = thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ = spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as URL (with dynamic ID) is blacklisted!")
 	}
 
@@ -298,10 +283,10 @@ func TestWhiteLIstLinks(t *testing.T) {
 	}
 	req.Header.Add("version", "v1")
 
-	thisSpec := createDefinitionFromString(nonExpiringDef)
+	spec := createDefinitionFromString(nonExpiringDef)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok != true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if !ok {
 		t.Error("Request should be OK as URL is whitelisted!")
 	}
 
@@ -319,8 +304,8 @@ func TestWhiteLIstLinks(t *testing.T) {
 	}
 	req.Header.Add("version", "v1")
 
-	ok, status, _ = thisSpec.IsRequestValid(req)
-	if ok != true {
+	ok, status, _ = spec.IsRequestValid(req)
+	if !ok {
 		t.Error("Request should be OK as URL is whitelisted (regex)!")
 	}
 
@@ -340,10 +325,10 @@ func TestWhiteListBlock(t *testing.T) {
 	}
 	req.Header.Add("version", "v1")
 
-	thisSpec := createDefinitionFromString(nonExpiringDef)
+	spec := createDefinitionFromString(nonExpiringDef)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as things not in whitelist should be rejected!")
 	}
 
@@ -363,10 +348,10 @@ func TestIgnored(t *testing.T) {
 	}
 	req.Header.Add("version", "v1")
 
-	thisSpec := createDefinitionFromString(nonExpiringDef)
+	spec := createDefinitionFromString(nonExpiringDef)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok != true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if !ok {
 		t.Error("Request should pass, URL is ignored")
 	}
 
@@ -386,10 +371,10 @@ func TestBlacklistLinksMulti(t *testing.T) {
 	}
 	req.Header.Add("version", "v2")
 
-	thisSpec := createDefinitionFromString(nonExpiringMultiDef)
+	spec := createDefinitionFromString(nonExpiringMultiDef)
 
-	ok, status, _ := thisSpec.IsRequestValid(req)
-	if ok == true {
+	ok, status, _ := spec.IsRequestValid(req)
+	if ok {
 		t.Error("Request should fail as URL is blacklisted!")
 	}
 
@@ -407,10 +392,10 @@ func TestBlacklistLinksMulti(t *testing.T) {
 	}
 	req.Header.Add("version", "v2")
 
-	ok, status, _ = thisSpec.IsRequestValid(req)
-	if ok != true {
+	ok, status, _ = spec.IsRequestValid(req)
+	if !ok {
 		t.Error("Request should be OK as in v2 this URL is not blacklisted")
-		t.Error(thisSpec.RxPaths["v2"])
+		t.Error(spec.RxPaths["v2"])
 	}
 
 	if status != StatusOk {

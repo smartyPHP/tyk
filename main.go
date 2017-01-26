@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	pprof_http "net/http/pprof"
+
 	"github.com/TykTechnologies/goagain"
 	"github.com/TykTechnologies/logrus"
 	"github.com/TykTechnologies/logrus-logstash-hook"
@@ -33,39 +35,43 @@ import (
 	"rsc.io/letsencrypt"
 )
 
-var log = logger.GetLogger()
-var config = Config{}
-var templates = &template.Template{}
-var analytics = RedisAnalyticsHandler{}
-var profileFile = &os.File{}
-var GlobalEventsJSVM = &JSVM{}
-var doMemoryProfile bool
-var doCpuProfile bool
-var Policies = make(map[string]Policy)
-var MainNotifier = RedisNotifier{}
-var DefaultOrgStore = DefaultSessionManager{}
-var DefaultQuotaStore = DefaultSessionManager{}
-var FallbackKeySesionManager SessionHandler = &DefaultSessionManager{}
-var MonitoringHandler TykEventHandler
-var RPCListener = RPCStorageHandler{}
-var argumentsBackup map[string]interface{}
-var DashService DashboardServiceSender
+var (
+	log                      = logger.GetLogger()
+	config                   = Config{}
+	templates                = &template.Template{}
+	analytics                = RedisAnalyticsHandler{}
+	profileFile              = &os.File{}
+	GlobalEventsJSVM         = &JSVM{}
+	doHTTPProfile            bool
+	doMemoryProfile          bool
+	doCpuProfile             bool
+	Policies                 = map[string]Policy{}
+	MainNotifier             = RedisNotifier{}
+	DefaultOrgStore          = DefaultSessionManager{}
+	DefaultQuotaStore        = DefaultSessionManager{}
+	FallbackKeySesionManager = SessionHandler(&DefaultSessionManager{})
+	MonitoringHandler        TykEventHandler
+	RPCListener              = RPCStorageHandler{}
+	argumentsBackup          map[string]interface{}
+	DashService              DashboardServiceSender
 
-var ApiSpecRegister *map[string]*APISpec //make(map[string]*APISpec)
-var keyGen = DefaultKeyGenerator{}
+	ApiSpecRegister map[string]*APISpec
+	keyGen          = DefaultKeyGenerator{}
 
-var mainRouter *mux.Router
-var defaultRouter *mux.Router
-var LE_MANAGER letsencrypt.Manager
-var LE_FIRSTRUN bool
+	mainRouter    *mux.Router
+	defaultRouter *mux.Router
+	LE_MANAGER    letsencrypt.Manager
+	LE_FIRSTRUN   bool
 
-var NodeID string
+	NodeID string
+)
 
-// Generic system error
+var runningTests = false
+
 const (
-	E_SYSTEM_ERROR          string = "{\"status\": \"system error, please contact administrator\"}"
-	OAUTH_AUTH_CODE_TIMEOUT int    = 60 * 60
-	OAUTH_PREFIX            string = "oauth-data."
+	// Generic system error
+	E_SYSTEM_ERROR = "{\"status\": \"system error, please contact administrator\"}"
+	OAUTH_PREFIX   = "oauth-data."
 )
 
 // Display configuration options
@@ -110,7 +116,7 @@ func setupGlobals() {
 		defaultRouter = mainRouter
 	}
 
-	if (config.EnableAnalytics == true) && (config.Storage.Type != "redis") {
+	if config.EnableAnalytics && config.Storage.Type != "redis" {
 		log.WithFields(logrus.Fields{
 			"prefix": "main",
 		}).Panic("Analytics requires Redis Storage backend, please enable Redis in the tyk.conf file.")
@@ -135,9 +141,9 @@ func setupGlobals() {
 
 		if config.AnalyticsConfig.Type == "rpc" {
 			log.Debug("Using RPC cache purge")
-			thisPurger := RPCPurger{Store: &AnalyticsStore, Address: config.SlaveOptions.ConnectionString}
-			thisPurger.Connect()
-			analytics.Clean = &thisPurger
+			purger := RPCPurger{Store: &AnalyticsStore, Address: config.SlaveOptions.ConnectionString}
+			purger.Connect()
+			analytics.Clean = &purger
 			go analytics.Clean.StartPurgeLoop(10)
 		}
 
@@ -199,7 +205,7 @@ func buildConnStr(resource string) string {
 		return ""
 	}
 
-	if config.DisableDashboardZeroConf == false && config.DBAppConfOptions.ConnectionString == "" {
+	if !config.DisableDashboardZeroConf && config.DBAppConfOptions.ConnectionString == "" {
 		log.WithFields(logrus.Fields{
 			"prefix": "main",
 		}).Info("Waiting for zeroconf signal...")
@@ -212,7 +218,7 @@ func buildConnStr(resource string) string {
 }
 
 // Pull API Specs from configuration
-var APILoader APIDefinitionLoader = APIDefinitionLoader{}
+var APILoader = APIDefinitionLoader{}
 
 func getAPISpecs() *[]*APISpec {
 	var APISpecs *[]*APISpec
@@ -241,14 +247,14 @@ func getAPISpecs() *[]*APISpec {
 	}).Printf("Detected %v APIs", len(*APISpecs))
 
 	if config.AuthOverride.ForceAuthProvider {
-		for i, _ := range *APISpecs {
+		for i := range *APISpecs {
 			(*APISpecs)[i].AuthProvider = config.AuthOverride.AuthProvider
 
 		}
 	}
 
 	if config.AuthOverride.ForceSessionProvider {
-		for i, _ := range *APISpecs {
+		for i := range *APISpecs {
 			(*APISpecs)[i].SessionProvider = config.AuthOverride.SessionProvider
 		}
 	}
@@ -342,6 +348,29 @@ func loadAPIEndpoints(Muxer *mux.Router) {
 	}).Debug("Loaded API Endpoints")
 }
 
+// CheckIsAPIOwner will ensure that the accessor of the tyk API has the
+// correct security credentials - this is a shared secret between the
+// client and the owner and is set in the tyk.conf file. This should
+// never be made public!
+func CheckIsAPIOwner(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tykAuthKey := r.Header.Get("X-Tyk-Authorization")
+		if tykAuthKey != config.Secret {
+			// Error
+			log.Warning("Attempted administrative access with invalid or missing key!")
+
+			responseMessage := createError("Forbidden")
+			w.WriteHeader(403)
+			fmt.Fprintf(w, string(responseMessage))
+
+			return
+		}
+
+		handler(w, r)
+
+	}
+}
+
 func generateOAuthPrefix(apiID string) string {
 	return OAUTH_PREFIX + apiID + "."
 }
@@ -417,8 +446,8 @@ func addBatchEndpoint(spec *APISpec, Muxer *mux.Router) {
 		"prefix": "main",
 	}).Debug("Batch requests enabled for API")
 	apiBatchPath := spec.Proxy.ListenPath + "tyk/batch/"
-	thisBatchHandler := BatchRequestHandler{API: spec}
-	Muxer.HandleFunc(apiBatchPath, thisBatchHandler.HandleBatchRequest)
+	batchHandler := BatchRequestHandler{API: spec}
+	Muxer.HandleFunc(apiBatchPath, batchHandler.HandleBatchRequest)
 }
 
 func loadCustomMiddleware(referenceSpec *APISpec) ([]string, tykcommon.MiddlewareDefinition, []tykcommon.MiddlewareDefinition, []tykcommon.MiddlewareDefinition, []tykcommon.MiddlewareDefinition, tykcommon.MiddlewareDriver) {
@@ -474,13 +503,13 @@ func loadCustomMiddleware(referenceSpec *APISpec) ([]string, tykcommon.Middlewar
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Debug("-- Middleware requires session: ", requiresSession)
-			thisMWDef := tykcommon.MiddlewareDefinition{}
-			thisMWDef.Name = middlewareObjectName
-			thisMWDef.Path = filePath
-			thisMWDef.RequireSession = requiresSession
+			mwDef := tykcommon.MiddlewareDefinition{}
+			mwDef.Name = middlewareObjectName
+			mwDef.Path = filePath
+			mwDef.RequireSession = requiresSession
 
 			mwPaths = append(mwPaths, filePath)
-			mwPreFuncs = append(mwPreFuncs, thisMWDef)
+			mwPreFuncs = append(mwPreFuncs, mwDef)
 		}
 	}
 
@@ -498,13 +527,13 @@ func loadCustomMiddleware(referenceSpec *APISpec) ([]string, tykcommon.Middlewar
 				"prefix": "main",
 			}).Debug("-- Middleware name ", middlewareObjectName)
 
-			thisMWDef := tykcommon.MiddlewareDefinition{}
-			thisMWDef.Name = middlewareObjectName
-			thisMWDef.Path = filePath
-			thisMWDef.RequireSession = false
+			mwDef := tykcommon.MiddlewareDefinition{}
+			mwDef.Name = middlewareObjectName
+			mwDef.Path = filePath
+			mwDef.RequireSession = false
 
 			mwPaths = append(mwPaths, filePath)
-			mwAuthCheckFunc = thisMWDef
+			mwAuthCheckFunc = mwDef
 			// only one allowed!
 			break
 		}
@@ -528,13 +557,13 @@ func loadCustomMiddleware(referenceSpec *APISpec) ([]string, tykcommon.Middlewar
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Debug("-- Middleware requires session: ", requiresSession)
-			thisMWDef := tykcommon.MiddlewareDefinition{}
-			thisMWDef.Name = middlewareObjectName
-			thisMWDef.Path = filePath
-			thisMWDef.RequireSession = requiresSession
+			mwDef := tykcommon.MiddlewareDefinition{}
+			mwDef.Name = middlewareObjectName
+			mwDef.Path = filePath
+			mwDef.RequireSession = requiresSession
 
 			mwPaths = append(mwPaths, filePath)
-			mwPostKeyAuthFuncs = append(mwPostFuncs, thisMWDef)
+			mwPostKeyAuthFuncs = append(mwPostFuncs, mwDef)
 		}
 	}
 
@@ -556,13 +585,13 @@ func loadCustomMiddleware(referenceSpec *APISpec) ([]string, tykcommon.Middlewar
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Debug("-- Middleware requires session: ", requiresSession)
-			thisMWDef := tykcommon.MiddlewareDefinition{}
-			thisMWDef.Name = middlewareObjectName
-			thisMWDef.Path = filePath
-			thisMWDef.RequireSession = requiresSession
+			mwDef := tykcommon.MiddlewareDefinition{}
+			mwDef.Name = middlewareObjectName
+			mwDef.Path = filePath
+			mwDef.RequireSession = requiresSession
 
 			mwPaths = append(mwPaths, filePath)
-			mwPostFuncs = append(mwPostFuncs, thisMWDef)
+			mwPostFuncs = append(mwPostFuncs, mwDef)
 		}
 	}
 
@@ -595,11 +624,11 @@ func creeateResponseMiddlewareChain(referenceSpec *APISpec) {
 			}).Error("Failed to load processor! ", err)
 			return
 		}
-		thisProcessor, _ := processorType.New(processorDetail.Options, referenceSpec)
+		processor, _ := processorType.New(processorDetail.Options, referenceSpec)
 		log.WithFields(logrus.Fields{
 			"prefix": "main",
 		}).Debug("Loading Response processor: ", processorDetail.Name)
-		responseChain[i] = thisProcessor
+		responseChain[i] = processor
 	}
 	referenceSpec.ResponseChain = &responseChain
 	if len(responseChain) > 0 {
@@ -635,10 +664,6 @@ func IsRPCMode() bool {
 		}
 	}
 	return false
-}
-
-func doCopy(from *APISpec, to *APISpec) {
-	*to = *from
 }
 
 type SortableAPISpecListByListen []*APISpec
@@ -858,7 +883,7 @@ func setupLogger() {
 func initialiseSystem(arguments map[string]interface{}) {
 
 	// Enable command mode
-	for k, _ := range CommandModeOptions {
+	for k := range CommandModeOptions {
 
 		v := arguments[k]
 
@@ -872,6 +897,19 @@ func initialiseSystem(arguments map[string]interface{}) {
 			os.Exit(0)
 		}
 
+	}
+
+	if runningTests && os.Getenv("TYK_LOGLEVEL") == "" {
+		// `go test` without TYK_LOGLEVEL override
+		log.Level = logrus.ErrorLevel
+	} else if dbg, _ := arguments["--debug"]; dbg == true {
+		log.Level = logrus.DebugLevel
+		log.WithFields(logrus.Fields{
+			"prefix": "main",
+		}).Debug("Enabling debug-level output")
+	} else {
+		// default is info
+		log.Level = logrus.InfoLevel
 	}
 
 	filename := "/etc/tyk/tyk.conf"
@@ -914,15 +952,7 @@ func initialiseSystem(arguments map[string]interface{}) {
 
 	doMemoryProfile, _ = arguments["--memprofile"].(bool)
 	doCpuProfile, _ = arguments["--cpuprofile"].(bool)
-
-	doDebug, _ := arguments["--debug"]
-	log.Level = logrus.InfoLevel
-	if doDebug == true {
-		log.Level = logrus.DebugLevel
-		log.WithFields(logrus.Fields{
-			"prefix": "main",
-		}).Debug("Enabling debug-level output")
-	}
+	doHTTPProfile, _ = arguments["--httpprofile"].(bool)
 
 	// Enable all the loggers
 	setupLogger()
@@ -965,6 +995,7 @@ func getCmdArguments() map[string]interface{} {
 		--port=PORT                  Listen on PORT (overrides confg file)
 		--memprofile                 Generate a memory profile
 		--cpuprofile                 Generate a cpu profile
+		--httpprofile                Expose runtime profiling data via HTTP
 		--debug                      Enable Debug output
 		--import-blueprint=<file>    Import an API Blueprint file
 		--import-swagger=<file>      Import a Swagger file
@@ -977,7 +1008,7 @@ func getCmdArguments() map[string]interface{} {
 		--log-instrumentation        Output instrumentation data to stdout
 	`
 
-	arguments, err := docopt.Parse(usage, nil, true, VERSION, false, false)
+	arguments, err := docopt.Parse(usage, nil, true, VERSION, false)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"prefix": "main",
@@ -1009,7 +1040,7 @@ func StartRPCKeepaliveWatcher(engine *RPCStorageHandler) {
 				KeepaliveRunning = false
 				break
 			}
-			if engine.Killed == true {
+			if engine.Killed {
 				log.WithFields(logrus.Fields{
 					"prefix": "RPC Conn Mgr",
 				}).Debug("[RPC Conn Mgr] this connection killed")
@@ -1078,14 +1109,12 @@ func main() {
 		initialiseSystem(arguments)
 		start()
 
-		var listenerErr error
-		l, listenerErr = generateListener(l)
-
-		// Check if listener was started successfully.
-		if listenerErr != nil {
+		var err error
+		l, err = generateListener(l)
+		if err != nil {
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
-			}).Fatalf("Error starting listener: %s", listenerErr)
+			}).Fatalf("Error starting listener: %s", err)
 		}
 
 		listen(l, goAgainErr)
@@ -1153,6 +1182,18 @@ func start() {
 		profileFile, _ = os.Create("tyk.prof")
 		pprof.StartCPUProfile(profileFile)
 		defer pprof.StopCPUProfile()
+	}
+
+	if doHTTPProfile {
+		log.WithFields(logrus.Fields{
+			"prefix": "main",
+		}).Debug("Adding pprof endpoints")
+
+		defaultRouter.HandleFunc("/debug/pprof/"+"{rest:.*}", http.HandlerFunc(pprof_http.Index))
+		defaultRouter.HandleFunc("/debug/pprof/cmdline", http.HandlerFunc(pprof_http.Cmdline))
+		defaultRouter.HandleFunc("/debug/pprof/profile", http.HandlerFunc(pprof_http.Profile))
+		defaultRouter.HandleFunc("/debug/pprof/symbol", http.HandlerFunc(pprof_http.Symbol))
+		defaultRouter.HandleFunc("/debug/pprof/trace", http.HandlerFunc(pprof_http.Trace))
 	}
 
 	// Set up a default org manager so we can traverse non-live paths
@@ -1252,8 +1293,7 @@ func handleDashboardRegistration() {
 		log.WithFields(logrus.Fields{
 			"prefix": "main",
 		}).Info("Registering node.")
-		err := DashService.Register()
-		if err != nil {
+		if err := DashService.Register(); err != nil {
 			log.Fatal("Registration failed: ", err)
 		}
 
@@ -1324,6 +1364,8 @@ func listen(l net.Listener, err error) {
 
 		// Use a custom server so we can control keepalives
 		if config.HttpServerOptions.OverrideDefaults {
+			defaultRouter.SkipClean(config.HttpServerOptions.SkipURLCleaning)
+
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Info("Custom gateway started")
@@ -1344,27 +1386,28 @@ func listen(l net.Listener, err error) {
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Printf("Gateway started (%v)", VERSION)
-			if !RPC_EmergencyMode {
-				http.Handle("/", mainRouter)
+			if RPC_EmergencyMode {
+				go http.Serve(l, nil)
+			} else {
+				go http.Serve(l, mainRouter)
 			}
-			go http.Serve(l, nil)
 			displayConfig()
 		}
 
 	} else {
 
 		// handle dashboard registration and nonces if available
-		thisNonce := os.Getenv("TYK_SERVICE_NONCE")
-		thisID := os.Getenv("TYK_SERVICE_NODEID")
-		if thisNonce == "" || thisID == "" {
+		nonce := os.Getenv("TYK_SERVICE_NONCE")
+		nodeID := os.Getenv("TYK_SERVICE_NODEID")
+		if nonce == "" || nodeID == "" {
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Warning("No nonce found, re-registering")
 			handleDashboardRegistration()
 
 		} else {
-			NodeID = thisID
-			ServiceNonce = thisNonce
+			NodeID = nodeID
+			ServiceNonce = nonce
 			log.WithFields(logrus.Fields{
 				"prefix": "main",
 			}).Info("State recovered")

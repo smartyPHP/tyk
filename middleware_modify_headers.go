@@ -130,7 +130,6 @@ func (t *TransformHeaders) iterateAddHeaders(kv map[string]string, r *http.Reque
 // ProcessRequest will run any checks on the request on the way through the system, return an error to have the chain fail
 func (t *TransformHeaders) ProcessRequest(w http.ResponseWriter, r *http.Request, configuration interface{}) (error, int) {
 	vInfo, versionPaths, _, _ := t.TykMiddleware.Spec.GetVersionData(r)
-
 	// Manage global headers first - remove
 	for _, gdKey := range vInfo.GlobalHeadersRemove {
 		log.Debug("Removing: ", gdKey)

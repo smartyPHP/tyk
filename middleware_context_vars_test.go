@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,7 +32,7 @@ const contextVarsMiddlewareDefinition = `{
 				},
 				"global_headers":{
 					"X-Static": "foo",
-					"X-Request-ID":"$tyk_context.cid",
+					"X-Request-ID":"$tyk_context.request_id",
 					"X-Path": "$tyk_context.path",
 					"X-Remote-Addr": "$tyk_context.remote_addr"
 				}
@@ -79,12 +78,10 @@ func TestContextVarsMiddleware(t *testing.T) {
 	}
 
 	if req.Header.Get("X-Static") == "" {
-		fmt.Println(recorder.HeaderMap)
 		t.Fatal("Sanity check failed: could not find static const in header")
 	}
 
 	if req.Header.Get("X-Path") == "" {
-		fmt.Println(recorder.HeaderMap)
 		t.Fatal("Could not find Path in header")
 	}
 

@@ -64,7 +64,7 @@ func (m *MiddlewareContextVars) ProcessRequest(w http.ResponseWriter, r *http.Re
 	contextDataObject["remote_addr"] = copiedRequest.RemoteAddr
 
 	//Correlation ID
-	contextDataObject["cid"] = uuid.NewV4().String()
+	contextDataObject["request_id"] = uuid.NewV4().String()
 
 	context.Set(r, ContextData, contextDataObject)
 
